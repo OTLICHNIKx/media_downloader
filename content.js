@@ -1,3 +1,6 @@
+
+let mediaDownloaderUiEnabled = true;
+
 const SUPPORTED_EXTENSIONS = ["mp3", "mp4", "wav", "m3u8"];
 
 const ICON_ADDED_ATTRIBUTE = "data-media-downloader-icon-added";
@@ -254,7 +257,11 @@ function injectStyles() {
     }
     
     .media-downloader-video-button .md-icon-symbol {
-     background: rgba(255, 255, 255, 0.85) !important;
+      background: rgba(255, 255, 255, 0.85) !important;
+    }
+    
+    .media-downloader-ui-disabled .media-downloader-icon {
+      display: none !important;
     }
   `;
 
@@ -318,6 +325,33 @@ function isElementReallyVisible(element) {
   }
 
   return rect.width > 60 && rect.height > 30;
+}
+
+function getCurrentSiteHost() {
+  return window.location.hostname;
+}
+
+function applyMediaDownloaderUiState(enabled) {
+  document.documentElement.classList.toggle(
+    "media-downloader-ui-disabled",
+    !enabled
+  );
+}
+
+function loadMediaDownloaderUiState() {
+  const host = getCurrentSiteHost();
+
+  chrome.storage.local.get(
+    {
+      disabledSites: {}
+    },
+    (result) => {
+      const disabledSites = result.disabledSites || {};
+      const isDisabled = Boolean(disabledSites[host]);
+
+      applyMediaDownloaderUiState(!isDisabled);
+    }
+  );
 }
 
 function scanAndAddIcons() {
@@ -395,8 +429,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ok: true,
       media
     });
+
+    return;
+  }
+
+  if (message.type === "SET_MEDIA_DOWNLOADER_UI") {
+    applyMediaDownloaderUiState(Boolean(message.enabled));
+
+    sendResponse({
+      ok: true,
+      enabled: Boolean(message.enabled)
+    });
   }
 });
+
+loadMediaDownloaderUiState();
 
 scanAndAddIcons();
 

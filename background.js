@@ -1,5 +1,3 @@
-// использование API для скачиваний браузера
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type !== "DOWNLOAD_MEDIA") {
     return;

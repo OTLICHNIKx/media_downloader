@@ -1,76 +1,110 @@
 body {
   margin: 0;
   font-family: Arial, sans-serif;
-  background: #f5f5f5;
+  background: #f5f7f8;
   color: #222;
 }
 
-.app {
-  width: 360px;
+.popup {
+  width: 320px;
   padding: 16px;
+  box-sizing: border-box;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
 }
 
 h1 {
-  margin: 0 0 12px;
+  margin: 0;
   font-size: 18px;
+  line-height: 1.2;
 }
 
-.primary-button {
-  width: 100%;
-  padding: 10px 12px;
-  border: none;
-  border-radius: 8px;
-  background: #2f6fed;
-  color: white;
-  font-size: 14px;
+.site-host {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #666;
+  word-break: break-all;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  padding: 12px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #e2e5e8;
+
   cursor: pointer;
+  user-select: none;
 }
 
-.primary-button:hover {
-  background: #255bd0;
+.toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.toggle-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.toggle-subtitle {
+  font-size: 12px;
+  color: #777;
+}
+
+.toggle-input {
+  display: none;
+}
+
+.toggle-visual {
+  position: relative;
+  width: 46px;
+  height: 26px;
+  min-width: 46px;
+
+  border-radius: 999px;
+  background: #cfd6dd;
+
+  transition: background 0.18s ease;
+}
+
+.toggle-visual::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+
+  width: 20px;
+  height: 20px;
+
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.22);
+
+  transition: transform 0.18s ease;
+}
+
+.toggle-input:checked + .toggle-visual {
+  background: #1f9d55;
+}
+
+.toggle-input:checked + .toggle-visual::before {
+  transform: translateX(20px);
 }
 
 .status {
-  margin: 12px 0;
-  font-size: 13px;
-  color: #555;
-}
-
-.media-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.media-item {
-  padding: 10px;
-  border-radius: 8px;
-  background: white;
-  border: 1px solid #ddd;
-}
-
-.media-title {
-  font-size: 13px;
-  font-weight: bold;
-  word-break: break-all;
-  margin-bottom: 6px;
-}
-
-.media-meta {
+  margin: 12px 0 0;
+  min-height: 16px;
   font-size: 12px;
   color: #666;
-  margin-bottom: 8px;
-}
-
-.download-button {
-  padding: 7px 10px;
-  border: none;
-  border-radius: 6px;
-  background: #1f9d55;
-  color: white;
-  cursor: pointer;
-}
-
-.download-button:hover {
-  background: #187d43;
 }

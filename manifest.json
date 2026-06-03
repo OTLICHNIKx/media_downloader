@@ -12,11 +12,11 @@
     "<all_urls>"
   ],
   "action": {
-    "default_title": "Media Downloader",
-    "default_popup": "popup/popup.html"
+    "default_title": "Media Downloader"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "default_popup": "popup/popup.html"
   },
   "content_scripts": [
     {

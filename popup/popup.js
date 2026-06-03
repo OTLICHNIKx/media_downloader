@@ -12,25 +12,16 @@ function normalizeUrl(url) {
   }
 }
 
-function getExtensionFromUrl(url) {
+function getMediaTypeFromUrl(url) {
   try {
     const parsedUrl = new URL(url);
-    const fullUrl = parsedUrl.href.toLowerCase();
+    const href = parsedUrl.href.toLowerCase();
     const pathname = parsedUrl.pathname.toLowerCase();
 
-    for (const extension of SUPPORTED_EXTENSIONS) {
-      if (pathname.endsWith(`.${extension}`)) {
-        return extension;
-      }
-
-      if (
-        fullUrl.includes(`.${extension}?`) ||
-        fullUrl.includes(`.${extension}&`) ||
-        fullUrl.includes(`.${extension}#`)
-      ) {
-        return extension;
-      }
-    }
+    if (pathname.endsWith(".mp3") || href.includes(".mp3?")) return "mp3";
+    if (pathname.endsWith(".mp4") || href.includes(".mp4?")) return "mp4";
+    if (pathname.endsWith(".wav") || href.includes(".wav?")) return "wav";
+    if (pathname.endsWith(".m3u8") || href.includes(".m3u8?")) return "hls";
 
     return null;
   } catch {

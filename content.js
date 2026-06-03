@@ -1,4 +1,4 @@
-const SUPPORTED_EXTENSIONS = ["mp3", "mp4", "wav"];
+const SUPPORTED_EXTENSIONS = ["mp3", "mp4", "wav", "m3u8"];
 
 const ICON_ADDED_ATTRIBUTE = "data-media-downloader-icon-added";
 

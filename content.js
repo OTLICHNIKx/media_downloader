@@ -99,7 +99,7 @@ function downloadMedia(mediaItem, buttonElement) {
 
         buttonElement.textContent = "Ошибка";
         setTimeout(() => {
-          buttonElement.innerHTML = `<span class="md-icon-symbol">⬇</span><span class="md-icon-text">Скачать</span>`;
+          buttonElement.innerHTML = getDownloadIconMarkup();
         }, 1200);
 
         return;
@@ -108,10 +108,27 @@ function downloadMedia(mediaItem, buttonElement) {
       buttonElement.textContent = "Скачивается...";
 
       setTimeout(() => {
-        buttonElement.innerHTML = `<span class="md-icon-symbol">⬇</span><span class="md-icon-text">Скачать</span>`;
+        buttonElement.innerHTML = getDownloadIconMarkup();
       }, 1200);
     }
   );
+}
+
+function getDownloadIconMarkup() {
+  return `
+    <span class="md-icon-symbol" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none">
+        <path
+          d="M12 3v11m0 0 4.5-4.5M12 14 7.5 9.5M5 19h14"
+          stroke="currentColor"
+          stroke-width="2.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+    </span>
+    <span class="md-icon-text">Скачать</span>
+  `;
 }
 
 function createDownloadIcon(mediaItem) {
@@ -120,7 +137,7 @@ function createDownloadIcon(mediaItem) {
   button.type = "button";
   button.className = "media-downloader-icon";
   button.title = `Скачать ${mediaItem.filename}`;
-  button.innerHTML = `<span class="md-icon-symbol">⬇</span><span class="md-icon-text">Скачать</span>`;
+  button.innerHTML = getDownloadIconMarkup();
 
   button.addEventListener("click", (event) => {
     event.preventDefault();
@@ -144,39 +161,50 @@ function injectStyles() {
       align-items: center !important;
       justify-content: center !important;
       gap: 6px !important;
-      width: 30px !important;
-      height: 30px !important;
-      min-width: 30px !important;
-      max-width: 30px !important;
+
       margin-left: 8px !important;
-      padding: 0 8px !important;
+      padding: 2px 4px !important;
+
       border: none !important;
-      border-radius: 999px !important;
-      background: #1f9d55 !important;
-      color: #ffffff !important;
+      background: transparent !important;
+      color: #0f8f52 !important;
+
       font-family: Arial, sans-serif !important;
-      font-size: 13px !important;
+      font-size: 14px !important;
       font-weight: 700 !important;
       line-height: 1 !important;
-      cursor: pointer !important;
-      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25) !important;
-      vertical-align: middle !important;
-      overflow: hidden !important;
-      white-space: nowrap !important;
-      transition: max-width 0.18s ease, width 0.18s ease, background 0.18s ease !important;
-      z-index: 2147483647 !important;
-    }
 
-    .media-downloader-icon:hover {
-      width: 104px !important;
-      max-width: 104px !important;
-      background: #168246 !important;
+      cursor: pointer !important;
+      vertical-align: middle !important;
+      white-space: nowrap !important;
+
+      transition:
+        background 0.18s ease,
+        color 0.18s ease,
+        padding 0.18s ease,
+        border-radius 0.18s ease,
+        opacity 0.18s ease !important;
+
+      z-index: 20 !important;
     }
 
     .media-downloader-icon .md-icon-symbol {
-      display: inline-block !important;
-      font-size: 16px !important;
-      line-height: 1 !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+
+      width: 24px !important;
+      height: 24px !important;
+      min-width: 24px !important;
+
+      background: rgba(31, 157, 85, 0.12) !important;
+      border-radius: 8px !important;
+    }
+
+    .media-downloader-icon .md-icon-symbol svg {
+      width: 20px !important;
+      height: 20px !important;
+      display: block !important;
     }
 
     .media-downloader-icon .md-icon-text {
@@ -187,15 +215,27 @@ function injectStyles() {
       transition: opacity 0.15s ease, max-width 0.15s ease !important;
     }
 
+    .media-downloader-icon:hover {
+      background: #1f9d55 !important;
+      color: #ffffff !important;
+      padding: 5px 7px !important;
+      border-radius: 999px !important;
+    }
+
+    .media-downloader-icon:hover .md-icon-symbol {
+      background: transparent !important;
+    }
+
     .media-downloader-icon:hover .md-icon-text {
       opacity: 1 !important;
-      max-width: 70px !important;
+      max-width: 80px !important;
     }
 
     .media-downloader-video-wrapper {
       position: relative !important;
       display: inline-block !important;
       line-height: 0 !important;
+      max-width: max-content !important;
     }
 
     .media-downloader-video-button {
@@ -203,11 +243,18 @@ function injectStyles() {
       top: 10px !important;
       right: 10px !important;
       margin-left: 0 !important;
-      opacity: 0.88 !important;
+
+      opacity: 0 !important;
+      pointer-events: none !important;
     }
 
-    .media-downloader-video-button:hover {
+    .media-downloader-video-wrapper:hover .media-downloader-video-button {
       opacity: 1 !important;
+      pointer-events: auto !important;
+    }
+    
+    .media-downloader-video-button .md-icon-symbol {
+     background: rgba(255, 255, 255, 0.85) !important;
     }
   `;
 
@@ -255,18 +302,39 @@ function addIconOnMediaElement(mediaElement, mediaItem) {
   mediaElement.setAttribute(ICON_ADDED_ATTRIBUTE, "true");
 }
 
+function isElementReallyVisible(element) {
+  if (!element) return false;
+
+  const style = window.getComputedStyle(element);
+
+  if (style.display === "none") return false;
+  if (style.visibility === "hidden") return false;
+  if (style.opacity === "0") return false;
+
+  const rect = element.getBoundingClientRect();
+
+  if (element.tagName.toLowerCase() === "a") {
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  return rect.width > 60 && rect.height > 30;
+}
+
 function scanAndAddIcons() {
   injectStyles();
 
   document.querySelectorAll("a[href]").forEach((linkElement) => {
-    const mediaItem = buildMediaItem(linkElement.getAttribute("href"), "inline-link");
+    if (!isElementReallyVisible(linkElement)) return;
 
+    const mediaItem = buildMediaItem(linkElement.getAttribute("href"), "inline-link");
     if (!mediaItem) return;
 
     addIconNearLink(linkElement, mediaItem);
   });
 
   document.querySelectorAll("audio, video").forEach((mediaElement) => {
+    if (!isElementReallyVisible(mediaElement)) return;
+
     let mediaItem =
       buildMediaItem(mediaElement.currentSrc, "inline-media-current-src") ||
       buildMediaItem(mediaElement.getAttribute("src"), "inline-media-src");

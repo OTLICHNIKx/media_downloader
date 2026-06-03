@@ -2,21 +2,22 @@
   "manifest_version": 3,
   "name": "Simple Media Downloader",
   "version": "0.1.0",
-  "description": "Finds direct MP3, MP4 and WAV links on the current page and downloads them.",
+  "description": "Finds direct media links on the current page and adds download buttons.",
   "permissions": [
     "activeTab",
     "scripting",
-    "downloads"
+    "downloads",
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
   "action": {
-    "default_title": "Media Downloader"
+    "default_title": "Media Downloader",
+    "default_popup": "popup/popup.html"
   },
   "background": {
-    "service_worker": "background.js",
-    "default_popup": "popup/popup.html"
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {

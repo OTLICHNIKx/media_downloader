@@ -1,6 +1,6 @@
 
 let mediaDownloaderUiEnabled = true;
-
+const HLS_PANEL_ID = "media-downloader-hls-panel";
 const SUPPORTED_EXTENSIONS = ["mp3", "mp4", "wav", "m3u8"];
 
 const ICON_ADDED_ATTRIBUTE = "data-media-downloader-icon-added";
@@ -68,6 +68,19 @@ function guessQuality(url) {
   return "unknown";
 }
 
+function buildHlsMediaItem(url, source = "latest-hls") {
+  const normalizedUrl = normalizeUrl(url);
+  if (!normalizedUrl) return null;
+
+  return {
+    url: normalizedUrl,
+    extension: "m3u8",
+    quality: "HLS",
+    filename: getFileName(normalizedUrl) || "media.m3u8",
+    source
+  };
+}
+
 function buildMediaItem(url, source = "page") {
   const normalizedUrl = normalizeUrl(url);
   if (!normalizedUrl) return null;
@@ -90,6 +103,20 @@ function buildMediaItem(url, source = "page") {
 function downloadMedia(mediaItem, buttonElement) {
   if (!mediaItem) return;
 
+  const isHls = mediaItem.extension === "m3u8";
+
+  if (isHls) {
+    buttonElement.textContent = "Открываю HLS...";
+
+    openHlsDownloaderPanel(mediaItem);
+
+    setTimeout(() => {
+      buttonElement.innerHTML = getDownloadIconMarkup();
+    }, 1200);
+
+    return;
+  }
+
   chrome.runtime.sendMessage(
     {
       type: "DOWNLOAD_MEDIA",
@@ -101,6 +128,7 @@ function downloadMedia(mediaItem, buttonElement) {
         console.warn("[Media Downloader] Download failed:", response?.error || "Unknown error");
 
         buttonElement.textContent = "Ошибка";
+
         setTimeout(() => {
           buttonElement.innerHTML = getDownloadIconMarkup();
         }, 1200);
@@ -354,6 +382,27 @@ function loadMediaDownloaderUiState() {
   );
 }
 
+function getLatestHlsStream(callback) {
+  chrome.runtime.sendMessage(
+    {
+      type: "GET_LATEST_HLS_STREAM"
+    },
+    (response) => {
+      if (chrome.runtime.lastError) {
+        callback(null);
+        return;
+      }
+
+      if (!response || !response.ok || !response.stream) {
+        callback(null);
+        return;
+      }
+
+      callback(response.stream);
+    }
+  );
+}
+
 function scanAndAddIcons() {
   injectStyles();
 
@@ -380,9 +429,31 @@ function scanAndAddIcons() {
       }
     }
 
-    if (!mediaItem) return;
+    if (mediaItem) {
+      addIconOnMediaElement(mediaElement, mediaItem);
+      return;
+    }
 
-    addIconOnMediaElement(mediaElement, mediaItem);
+    if (mediaElement.hasAttribute(ICON_ADDED_ATTRIBUTE)) return;
+
+    const now = Date.now();
+    const lastHlsCheckAt = Number(mediaElement.dataset.mediaDownloaderLastHlsCheckAt || 0);
+
+    if (now - lastHlsCheckAt < 2000) return;
+
+    mediaElement.dataset.mediaDownloaderLastHlsCheckAt = String(now);
+
+    getLatestHlsStream((stream) => {
+      if (!stream || !stream.url) return;
+      if (mediaElement.hasAttribute(ICON_ADDED_ATTRIBUTE)) return;
+      if (!isElementReallyVisible(mediaElement)) return;
+
+      const hlsItem = buildHlsMediaItem(stream.url, "latest-hls-stream");
+
+      if (!hlsItem) return;
+
+      addIconOnMediaElement(mediaElement, hlsItem);
+    });
   });
 }
 
@@ -421,6 +492,45 @@ function collectMediaLinks() {
   return Array.from(found.values());
 }
 
+function closeHlsDownloaderPanel() {
+  const existingPanel = document.getElementById(HLS_PANEL_ID);
+
+  if (existingPanel) {
+    existingPanel.remove();
+  }
+}
+
+function openHlsDownloaderPanel(mediaItem) {
+  if (!mediaItem || !mediaItem.url) return;
+
+  closeHlsDownloaderPanel();
+
+  const panelUrl =
+    chrome.runtime.getURL("hls/hls.html") +
+    `?url=${encodeURIComponent(mediaItem.url)}` +
+    `&filename=${encodeURIComponent(mediaItem.filename || "media.m3u8")}` +
+    `&embed=1`;
+
+  const iframe = document.createElement("iframe");
+
+  iframe.id = HLS_PANEL_ID;
+  iframe.src = panelUrl;
+  iframe.allow = "downloads";
+  iframe.style.position = "fixed";
+  iframe.style.right = "18px";
+  iframe.style.bottom = "18px";
+  iframe.style.width = "420px";
+  iframe.style.height = "320px";
+  iframe.style.border = "none";
+  iframe.style.borderRadius = "16px";
+  iframe.style.background = "#ffffff";
+  iframe.style.boxShadow = "0 12px 40px rgba(0, 0, 0, 0.25)";
+  iframe.style.zIndex = "2147483646";
+  iframe.style.overflow = "hidden";
+
+  document.documentElement.appendChild(iframe);
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SCAN_MEDIA") {
     const media = collectMediaLinks();
@@ -440,6 +550,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ok: true,
       enabled: Boolean(message.enabled)
     });
+  }
+});
+
+window.addEventListener("message", (event) => {
+  const panel = document.getElementById(HLS_PANEL_ID);
+
+  if (!panel) return;
+  if (event.source !== panel.contentWindow) return;
+
+  if (
+    event.data &&
+    event.data.source === "MEDIA_DOWNLOADER_HLS" &&
+    event.data.type === "CLOSE"
+  ) {
+    closeHlsDownloaderPanel();
   }
 });
 

@@ -2,19 +2,121 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>Media Test</title>
+  <title>Media Downloader Test</title>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 32px;
+      font-family: Arial, sans-serif;
+      background: #f5f7f8;
+      color: #222;
+    }
+
+    .page {
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    .card {
+      margin-bottom: 24px;
+      padding: 20px;
+      border-radius: 16px;
+      background: #ffffff;
+      border: 1px solid #e1e5e8;
+    }
+
+    h1 {
+      margin-top: 0;
+    }
+
+    h2 {
+      margin-top: 0;
+      font-size: 18px;
+    }
+
+    p {
+      color: #666;
+      line-height: 1.45;
+    }
+
+    video,
+    audio {
+      display: block;
+      margin-top: 12px;
+      width: 100%;
+      max-width: 560px;
+    }
+
+    .fake-player {
+      width: 100%;
+      max-width: 560px;
+      height: 80px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      background: #eef2f4;
+      border: 1px dashed #b7c1c9;
+      color: #55616b;
+      font-weight: 700;
+    }
+
+    .hint {
+      font-size: 13px;
+      color: #777;
+    }
+  </style>
 </head>
 <body>
-  <h1>Тест медиа</h1>
+  <main class="page">
+    <h1>Media Downloader Test</h1>
 
-  <a href="https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3">
-  Скачать музыку
-  </a>
+    <section class="card">
+      <h2>1. Прямая MP3-ссылка</h2>
+      <p>
+        Рядом со ссылкой должна появиться кнопка скачивания.
+      </p>
 
-  <br><br>
+      <a href="https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3">
+        Скачать тестовый MP3
+      </a>
+    </section>
 
-  <video controls width="400">
-    <source src="https://samplelib.com/lib/preview/mp4/sample-5s.mp4" type="video/mp4">
-  </video>
+    <section class="card">
+      <h2>2. Прямое MP4-видео</h2>
+      <p>
+        При наведении на видео должна появиться кнопка скачивания.
+      </p>
+
+      <video controls width="560">
+        <source src="https://samplelib.com/lib/preview/mp4/sample-5s.mp4" type="video/mp4">
+      </video>
+    </section>
+
+    <section class="card">
+      <h2>3. HLS-поток .m3u8</h2>
+      <p>
+        Это тестовый HLS-плейлист. Кнопка должна открыть HLS Downloader.
+      </p>
+
+      <a href="test_hls/playlist.m3u8">
+        Скачать тестовый HLS playlist
+      </a>
+
+      <p class="hint">
+        Важно: это тестовый локальный playlist. Он нужен, чтобы проверить логику обработки .m3u8.
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>4. HLS через video src</h2>
+      <p>
+        Даже если браузер сам не проиграет .m3u8, расширение должно увидеть ссылку в src.
+      </p>
+
+      <video controls width="560" src="test_hls/playlist.m3u8"></video>
+    </section>
+  </main>
 </body>
 </html>

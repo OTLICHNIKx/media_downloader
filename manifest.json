@@ -2,12 +2,13 @@
   "manifest_version": 3,
   "name": "Simple Media Downloader",
   "version": "0.1.0",
-  "description": "Finds direct media links on the current page and adds download buttons.",
+  "description": "Finds direct media links and open HLS streams on the current page.",
   "permissions": [
     "activeTab",
     "scripting",
     "downloads",
-    "storage"
+    "storage",
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -19,6 +20,18 @@
   "background": {
     "service_worker": "background.js"
   },
+  "web_accessible_resources": [
+  {
+      "resources": [
+        "hls/hls.html",
+        "hls/hls.css",
+        "hls/hls.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
   "content_scripts": [
     {
       "matches": [

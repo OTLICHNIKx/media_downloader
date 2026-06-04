@@ -117,6 +117,51 @@
 
       <video controls width="560" src="test_hls/playlist.m3u8"></video>
     </section>
+        <section
+      class="card"
+      data-media-downloader-track
+      data-media-title="Dynamic test HLS track"
+    >
+      <h2>5. Динамический HLS-трек без прямой ссылки</h2>
+
+      <p>
+        Здесь нет видимой ссылки на .m3u8. Нажми Play simulated stream.
+        Расширение должно поймать сетевой запрос и привязать поток к этой карточке.
+      </p>
+
+      <button id="playDynamicHlsButton" type="button">
+        Play simulated stream
+      </button>
+
+      <p id="dynamicHlsStatus" class="hint">
+        Поток ещё не запрашивался.
+      </p>
+    </section>
   </main>
+<script>
+  const playDynamicHlsButton = document.getElementById("playDynamicHlsButton");
+  const dynamicHlsStatus = document.getElementById("dynamicHlsStatus");
+
+  playDynamicHlsButton.addEventListener("click", async () => {
+    dynamicHlsStatus.textContent = "Запрашиваю скрытый HLS playlist...";
+
+    try {
+      const response = await fetch(`test_hls/playlist.m3u8?dynamic=1&t=${Date.now()}`, {
+        cache: "no-store"
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      await response.text();
+
+      dynamicHlsStatus.textContent =
+        "Playlist запрошен. Если расширение поймало поток, справа сверху на карточке появится кнопка.";
+    } catch (error) {
+      dynamicHlsStatus.textContent = `Ошибка тестового запроса: ${error.message}`;
+    }
+  });
+</script>
 </body>
 </html>

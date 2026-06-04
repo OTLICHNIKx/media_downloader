@@ -1,4 +1,9 @@
 
+const TRACK_CAPTURE_ATTRIBUTE = "data-media-downloader-capture-id";
+const TRACK_STREAM_URL_ATTRIBUTE = "data-media-downloader-stream-url";
+const TRACK_STREAM_TYPE_ATTRIBUTE = "data-media-downloader-stream-type";
+const TRACK_BOUND_ATTRIBUTE = "data-media-downloader-track-bound";
+
 const MEDIA_DOWNLOADER_ICON_CLASS = "media-downloader-icon";
 const MEDIA_DOWNLOADER_URL_ATTRIBUTE = "data-media-downloader-url";
 
@@ -7,7 +12,7 @@ let mediaDownloaderLastLocation = window.location.href;
 
 let mediaDownloaderUiEnabled = true;
 const HLS_PANEL_ID = "media-downloader-hls-panel";
-const SUPPORTED_EXTENSIONS = ["mp3", "mp4", "wav", "m3u8"];
+const SUPPORTED_EXTENSIONS = ["mp3", "mp4", "wav", "m3u8", "mpd"];
 
 const ICON_ADDED_ATTRIBUTE = "data-media-downloader-icon-added";
 
@@ -109,7 +114,13 @@ function buildMediaItem(url, source = "page") {
 function downloadMedia(mediaItem, buttonElement) {
   if (!mediaItem) return;
 
-  const isHls = mediaItem.extension === "m3u8";
+  const isHls =
+    mediaItem.extension === "m3u8" ||
+    mediaItem.streamType === "hls";
+
+  const isDash =
+    mediaItem.extension === "mpd" ||
+    mediaItem.streamType === "dash";
 
   if (isHls) {
     buttonElement.textContent = "Открываю HLS...";
@@ -119,6 +130,21 @@ function downloadMedia(mediaItem, buttonElement) {
     setTimeout(() => {
       buttonElement.innerHTML = getDownloadIconMarkup();
     }, 1200);
+
+    return;
+  }
+
+  if (isDash) {
+    buttonElement.textContent = "DASH позже";
+
+    console.warn(
+      "[Media Downloader] DASH detected, but DASH downloader is not implemented yet:",
+      mediaItem.url
+    );
+
+    setTimeout(() => {
+      buttonElement.innerHTML = getDownloadIconMarkup();
+    }, 1500);
 
     return;
   }
@@ -297,6 +323,23 @@ function injectStyles() {
     .media-downloader-ui-disabled .media-downloader-icon {
       display: none !important;
     }
+    
+    [data-media-downloader-track] {
+      position: relative;
+    }
+
+    [data-media-downloader-capturing="true"] {
+      outline: 1px dashed rgba(31, 157, 85, 0.35);
+      outline-offset: 3px;
+    }
+
+    .media-downloader-track-button {
+      position: absolute !important;
+      top: 10px !important;
+      right: 10px !important;
+      margin-left: 0 !important;
+      z-index: 30 !important;
+    }
   `;
 
   document.documentElement.appendChild(style);
@@ -471,6 +514,144 @@ function cleanupBrokenDownloaderMarks() {
       }
     }
   });
+}
+
+function createCaptureId() {
+  return `capture-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function findTrackCandidateFromTarget(target) {
+  if (!target || !(target instanceof Element)) return null;
+
+  return target.closest("[data-media-downloader-track]");
+}
+
+function getOrCreateTrackCaptureId(trackElement) {
+  let captureId = trackElement.getAttribute(TRACK_CAPTURE_ATTRIBUTE);
+
+  if (!captureId) {
+    captureId = createCaptureId();
+    trackElement.setAttribute(TRACK_CAPTURE_ATTRIBUTE, captureId);
+  }
+
+  return captureId;
+}
+
+function getTrackTitle(trackElement) {
+  const explicitTitle =
+    trackElement.getAttribute("data-media-title") ||
+    trackElement.getAttribute("aria-label");
+
+  if (explicitTitle && explicitTitle.trim()) {
+    return explicitTitle.trim();
+  }
+
+  const text = trackElement.textContent || "";
+  const cleanText = text.replace(/\s+/g, " ").trim();
+
+  if (cleanText) {
+    return cleanText.slice(0, 120);
+  }
+
+  return "media";
+}
+
+function buildStreamMediaItem(stream, source = "captured-stream") {
+  if (!stream || !stream.url) return null;
+
+  const normalizedUrl = normalizeUrl(stream.url);
+  if (!normalizedUrl) return null;
+
+  const streamType =
+    stream.type ||
+    (normalizedUrl.toLowerCase().includes(".mpd") ? "dash" : "hls");
+
+  const extension = streamType === "dash" ? "mpd" : "m3u8";
+
+  return {
+    url: normalizedUrl,
+    extension,
+    streamType,
+    quality: streamType.toUpperCase(),
+    filename: getFileName(normalizedUrl) || `media.${extension}`,
+    source
+  };
+}
+
+function startStreamCaptureForTrack(trackElement, reason = "interaction") {
+  if (!trackElement) return;
+
+  const now = Date.now();
+  const lastCaptureAt = Number(trackElement.dataset.mediaDownloaderLastCaptureAt || 0);
+
+  if (now - lastCaptureAt < 2500) {
+    return;
+  }
+
+  trackElement.dataset.mediaDownloaderLastCaptureAt = String(now);
+
+  const captureId = getOrCreateTrackCaptureId(trackElement);
+  const trackTitle = getTrackTitle(trackElement);
+
+  chrome.runtime.sendMessage(
+    {
+      type: "START_STREAM_CAPTURE",
+      captureId,
+      trackTitle,
+      reason,
+      timeoutMs: 7000
+    },
+    (response) => {
+      if (chrome.runtime.lastError) {
+        return;
+      }
+
+      if (!response || !response.ok) {
+        return;
+      }
+
+      trackElement.setAttribute("data-media-downloader-capturing", "true");
+
+      setTimeout(() => {
+        trackElement.removeAttribute("data-media-downloader-capturing");
+      }, 7000);
+    }
+  );
+}
+
+function addIconOnTrackElement(trackElement, mediaItem) {
+  if (!trackElement || !mediaItem) return;
+
+  const existingIcon = trackElement.querySelector(
+    `:scope > .${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
+  );
+
+  if (
+    existingIcon &&
+    existingIcon.getAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE) === mediaItem.url
+  ) {
+    return;
+  }
+
+  if (existingIcon) {
+    existingIcon.remove();
+  }
+
+  const computedStyle = window.getComputedStyle(trackElement);
+  if (computedStyle.position === "static") {
+    trackElement.style.position = "relative";
+  }
+
+  const icon = createDownloadIcon(mediaItem);
+  icon.classList.add("media-downloader-track-button");
+  icon.setAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE, mediaItem.url);
+  icon.setAttribute(TRACK_STREAM_TYPE_ATTRIBUTE, mediaItem.streamType || mediaItem.extension);
+
+  trackElement.appendChild(icon);
+
+  trackElement.setAttribute(TRACK_BOUND_ATTRIBUTE, "true");
+  trackElement.setAttribute(TRACK_STREAM_URL_ATTRIBUTE, mediaItem.url);
+  trackElement.setAttribute(TRACK_STREAM_TYPE_ATTRIBUTE, mediaItem.streamType || mediaItem.extension);
 }
 
 function scanAndAddIcons() {
@@ -675,6 +856,40 @@ function openHlsDownloaderPanel(mediaItem) {
   document.documentElement.appendChild(iframe);
 }
 
+document.addEventListener(
+  "pointerover",
+  (event) => {
+    const target = event.target;
+
+    if (target instanceof Element && target.closest(`.${MEDIA_DOWNLOADER_ICON_CLASS}`)) {
+      return;
+    }
+
+    const trackElement = findTrackCandidateFromTarget(target);
+    if (!trackElement) return;
+
+    startStreamCaptureForTrack(trackElement, "pointerover");
+  },
+  true
+);
+
+document.addEventListener(
+  "pointerdown",
+  (event) => {
+    const target = event.target;
+
+    if (target instanceof Element && target.closest(`.${MEDIA_DOWNLOADER_ICON_CLASS}`)) {
+      return;
+    }
+
+    const trackElement = findTrackCandidateFromTarget(target);
+    if (!trackElement) return;
+
+    startStreamCaptureForTrack(trackElement, "pointerdown");
+  },
+  true
+);
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SCAN_MEDIA") {
     const media = collectMediaLinks();
@@ -693,6 +908,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({
       ok: true,
       enabled: Boolean(message.enabled)
+    });
+
+    return;
+  }
+
+  if (message.type === "MEDIA_DOWNLOADER_CAPTURED_STREAM") {
+    const captureId = message.captureId;
+    const stream = message.stream;
+
+    const trackElement = Array.from(
+      document.querySelectorAll(`[${TRACK_CAPTURE_ATTRIBUTE}]`)
+    ).find((element) => {
+      return element.getAttribute(TRACK_CAPTURE_ATTRIBUTE) === captureId;
+    });
+
+    if (!trackElement) {
+      sendResponse({
+        ok: false,
+        error: "Track element not found for captureId"
+      });
+
+      return;
+    }
+
+    const mediaItem = buildStreamMediaItem(stream, "captured-stream");
+
+    if (!mediaItem) {
+      sendResponse({
+        ok: false,
+        error: "Cannot build media item from captured stream"
+      });
+
+      return;
+    }
+
+    addIconOnTrackElement(trackElement, mediaItem);
+
+    sendResponse({
+      ok: true
     });
   }
 });

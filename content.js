@@ -1,4 +1,10 @@
 
+const MEDIA_DOWNLOADER_ICON_CLASS = "media-downloader-icon";
+const MEDIA_DOWNLOADER_URL_ATTRIBUTE = "data-media-downloader-url";
+
+let mediaDownloaderScanTimer = null;
+let mediaDownloaderLastLocation = window.location.href;
+
 let mediaDownloaderUiEnabled = true;
 const HLS_PANEL_ID = "media-downloader-hls-panel";
 const SUPPORTED_EXTENSIONS = ["mp3", "mp4", "wav", "m3u8"];
@@ -297,15 +303,34 @@ function injectStyles() {
 }
 
 function addIconNearLink(linkElement, mediaItem) {
-  if (linkElement.hasAttribute(ICON_ADDED_ATTRIBUTE)) return;
+  const nextElement = linkElement.nextElementSibling;
+  const existingIcon =
+    nextElement && nextElement.classList && nextElement.classList.contains(MEDIA_DOWNLOADER_ICON_CLASS)
+      ? nextElement
+      : null;
+
+  if (
+    linkElement.hasAttribute(ICON_ADDED_ATTRIBUTE) &&
+    existingIcon &&
+    existingIcon.getAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE) === mediaItem.url
+  ) {
+    return;
+  }
+
+  if (existingIcon) {
+    existingIcon.remove();
+  }
 
   const icon = createDownloadIcon(mediaItem);
+  icon.setAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE, mediaItem.url);
 
   linkElement.insertAdjacentElement("afterend", icon);
   linkElement.setAttribute(ICON_ADDED_ATTRIBUTE, "true");
 }
 
 function wrapMediaElementIfNeeded(mediaElement) {
+  if (!mediaElement || !mediaElement.parentNode) return null;
+
   const parent = mediaElement.parentElement;
 
   if (
@@ -326,12 +351,27 @@ function wrapMediaElementIfNeeded(mediaElement) {
 }
 
 function addIconOnMediaElement(mediaElement, mediaItem) {
-  if (mediaElement.hasAttribute(ICON_ADDED_ATTRIBUTE)) return;
-
   const wrapper = wrapMediaElementIfNeeded(mediaElement);
-  const icon = createDownloadIcon(mediaItem);
 
+  if (!wrapper) return;
+
+  const existingIcon = wrapper.querySelector(`.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-video-button`);
+
+  if (
+    mediaElement.hasAttribute(ICON_ADDED_ATTRIBUTE) &&
+    existingIcon &&
+    existingIcon.getAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE) === mediaItem.url
+  ) {
+    return;
+  }
+
+  if (existingIcon) {
+    existingIcon.remove();
+  }
+
+  const icon = createDownloadIcon(mediaItem);
   icon.classList.add("media-downloader-video-button");
+  icon.setAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE, mediaItem.url);
 
   wrapper.appendChild(icon);
   mediaElement.setAttribute(ICON_ADDED_ATTRIBUTE, "true");
@@ -403,9 +443,39 @@ function getLatestHlsStream(callback) {
   );
 }
 
+function cleanupBrokenDownloaderMarks() {
+  document.querySelectorAll(`[${ICON_ADDED_ATTRIBUTE}]`).forEach((element) => {
+    if (element.tagName.toLowerCase() === "a") {
+      const nextElement = element.nextElementSibling;
+      const hasIcon =
+        nextElement &&
+        nextElement.classList &&
+        nextElement.classList.contains(MEDIA_DOWNLOADER_ICON_CLASS);
+
+      if (!hasIcon) {
+        element.removeAttribute(ICON_ADDED_ATTRIBUTE);
+      }
+
+      return;
+    }
+
+    if (element.matches("audio, video")) {
+      const parent = element.parentElement;
+      const hasIcon =
+        parent &&
+        parent.querySelector &&
+        parent.querySelector(`.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-video-button`);
+
+      if (!hasIcon) {
+        element.removeAttribute(ICON_ADDED_ATTRIBUTE);
+      }
+    }
+  });
+}
+
 function scanAndAddIcons() {
   injectStyles();
-
+  cleanupBrokenDownloaderMarks();
   document.querySelectorAll("a[href]").forEach((linkElement) => {
     if (!isElementReallyVisible(linkElement)) return;
 
@@ -454,6 +524,80 @@ function scanAndAddIcons() {
 
       addIconOnMediaElement(mediaElement, hlsItem);
     });
+  });
+}
+
+function scheduleMediaDownloaderScan(delay = 250) {
+  clearTimeout(mediaDownloaderScanTimer);
+
+  mediaDownloaderScanTimer = setTimeout(() => {
+    try {
+      scanAndAddIcons();
+    } catch (error) {
+      console.warn("[Media Downloader] scan failed:", error);
+    }
+  }, delay);
+}
+
+function handlePossibleSpaNavigation() {
+  if (mediaDownloaderLastLocation === window.location.href) {
+    return;
+  }
+
+  mediaDownloaderLastLocation = window.location.href;
+
+  document.querySelectorAll(`[${ICON_ADDED_ATTRIBUTE}]`).forEach((element) => {
+    element.removeAttribute(ICON_ADDED_ATTRIBUTE);
+  });
+
+  document.querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}`).forEach((element) => {
+    element.remove();
+  });
+
+  scheduleMediaDownloaderScan(400);
+  scheduleMediaDownloaderScan(1200);
+}
+
+function installSpaNavigationHooks() {
+  const originalPushState = history.pushState;
+  const originalReplaceState = history.replaceState;
+
+  history.pushState = function patchedPushState(...args) {
+    const result = originalPushState.apply(this, args);
+
+    setTimeout(handlePossibleSpaNavigation, 0);
+    setTimeout(() => scheduleMediaDownloaderScan(600), 600);
+
+    return result;
+  };
+
+  history.replaceState = function patchedReplaceState(...args) {
+    const result = originalReplaceState.apply(this, args);
+
+    setTimeout(handlePossibleSpaNavigation, 0);
+    setTimeout(() => scheduleMediaDownloaderScan(600), 600);
+
+    return result;
+  };
+
+  window.addEventListener("popstate", () => {
+    handlePossibleSpaNavigation();
+    scheduleMediaDownloaderScan(600);
+  });
+
+  window.addEventListener("hashchange", () => {
+    handlePossibleSpaNavigation();
+    scheduleMediaDownloaderScan(600);
+  });
+
+  window.addEventListener("pageshow", () => {
+    scheduleMediaDownloaderScan(300);
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      scheduleMediaDownloaderScan(300);
+    }
   });
 }
 
@@ -570,13 +714,23 @@ window.addEventListener("message", (event) => {
 
 loadMediaDownloaderUiState();
 
-scanAndAddIcons();
+installSpaNavigationHooks();
+
+scheduleMediaDownloaderScan(100);
+scheduleMediaDownloaderScan(800);
+scheduleMediaDownloaderScan(1800);
 
 const observer = new MutationObserver(() => {
-  scanAndAddIcons();
+  handlePossibleSpaNavigation();
+  scheduleMediaDownloaderScan(350);
 });
 
 observer.observe(document.documentElement, {
   childList: true,
   subtree: true
 });
+
+setInterval(() => {
+  handlePossibleSpaNavigation();
+  scheduleMediaDownloaderScan(300);
+}, 3000);

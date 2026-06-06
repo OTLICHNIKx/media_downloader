@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>DASH Downloader</title>
+  <link rel="stylesheet" href="dash.css">
+</head>
+<body>
+  <main class="page">
+    <section class="card">
+      <header class="topbar">
+        <div>
+          <h1>DASH Downloader</h1>
+          <p class="description">
+            Скачивание audio-only DASH потока
+          </p>
+        </div>
+
+        <button id="closeButton" class="close-button" type="button" title="Закрыть">
+          ×
+        </button>
+      </header>
+
+      <div class="url-box">
+        <div class="label">Источник:</div>
+        <div id="sourceUrl" class="source-url">—</div>
+      </div>
+
+      <div id="representationControls" class="representation-controls" hidden>
+        <label class="label" for="representationSelect">Audio representation:</label>
+
+        <select id="representationSelect" class="representation-select"></select>
+
+        <div class="actions">
+          <button id="downloadButton" class="primary-button" type="button" disabled>
+            Скачать выбранное
+          </button>
+
+          <button id="cancelDownloadButton" class="secondary-button" type="button" hidden>
+            Отменить
+          </button>
+        </div>
+      </div>
+
+      <div class="progress-wrap">
+        <div id="progressBar" class="progress-bar"></div>
+      </div>
+
+      <p id="status" class="status">Подготовка...</p>
+
+      <div id="details" class="details"></div>
+    </section>
+  </main>
+
+  <script src="dash.js"></script>
+</body>
+</html>

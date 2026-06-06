@@ -1,0 +1,25 @@
+window.addEventListener("message", (event) => {
+  const hlsPanel = document.getElementById(HLS_PANEL_ID);
+  const dashPanel = document.getElementById(DASH_PANEL_ID);
+
+  if (
+    hlsPanel &&
+    event.source === hlsPanel.contentWindow &&
+    event.data &&
+    event.data.source === "MEDIA_DOWNLOADER_HLS" &&
+    event.data.type === "CLOSE"
+  ) {
+    closeHlsDownloaderPanel();
+    return;
+  }
+
+  if (
+    dashPanel &&
+    event.source === dashPanel.contentWindow &&
+    event.data &&
+    event.data.source === "MEDIA_DOWNLOADER_DASH" &&
+    event.data.type === "CLOSE"
+  ) {
+    closeDashDownloaderPanel();
+  }
+});

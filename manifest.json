@@ -25,7 +25,10 @@
       "resources": [
         "hls/hls.html",
         "hls/hls.css",
-        "hls/hls.js"
+        "hls/hls.js",
+        "dash/dash.html",
+        "dash/dash.css",
+        "dash/dash/js"
       ],
       "matches": [
         "<all_urls>"

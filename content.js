@@ -12,7 +12,18 @@ let mediaDownloaderLastLocation = window.location.href;
 
 let mediaDownloaderUiEnabled = true;
 const HLS_PANEL_ID = "media-downloader-hls-panel";
-const SUPPORTED_EXTENSIONS = ["mp3", "mp4", "wav", "m3u8", "mpd"];
+const SUPPORTED_EXTENSIONS = [
+  "mp3",
+  "m4a",
+  "aac",
+  "ogg",
+  "opus",
+  "wav",
+  "flac",
+  "mp4",
+  "m3u8",
+  "mpd"
+];
 
 const ICON_ADDED_ATTRIBUTE = "data-media-downloader-icon-added";
 
@@ -656,17 +667,36 @@ function buildStreamMediaItem(stream, source = "captured-stream") {
   const normalizedUrl = normalizeUrl(stream.url);
   if (!normalizedUrl) return null;
 
+  const urlExtension = getExtensionFromUrl(normalizedUrl);
+
   const streamType =
     stream.type ||
-    (normalizedUrl.toLowerCase().includes(".mpd") ? "dash" : "hls");
+    (normalizedUrl.toLowerCase().includes(".mpd") ? "dash" : null) ||
+    (normalizedUrl.toLowerCase().includes(".m3u8") ? "hls" : null) ||
+    "audio";
 
-  const extension = streamType === "dash" ? "mpd" : "m3u8";
+  let extension = stream.extension || urlExtension;
+
+  if (!extension) {
+    if (streamType === "dash") {
+      extension = "mpd";
+    } else if (streamType === "hls") {
+      extension = "m3u8";
+    } else {
+      extension = "mp3";
+    }
+  }
+
+  const quality =
+    streamType === "audio"
+      ? guessQuality(normalizedUrl)
+      : streamType.toUpperCase();
 
   return {
     url: normalizedUrl,
     extension,
     streamType,
-    quality: streamType.toUpperCase(),
+    quality,
     filename: getFileName(normalizedUrl) || `media.${extension}`,
     source
   };

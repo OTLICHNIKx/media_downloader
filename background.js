@@ -2,6 +2,78 @@ const streamsByTabId = {};
 const activeCapturesByTabId = {};
 const capturedStreamsByTabId = {};
 
+const MAX_STREAMS_PER_TAB = 30;
+
+const AUDIO_STREAM_EXTENSIONS = [
+  "mp3",
+  "m4a",
+  "aac",
+  "ogg",
+  "opus",
+  "wav",
+  "flac"
+];
+
+const STREAM_EXTENSIONS = [
+  "m3u8",
+  "mpd",
+  ...AUDIO_STREAM_EXTENSIONS
+];
+
+function getExtensionFromUrl(url) {
+  try {
+    const parsedUrl = new URL(url);
+    const href = parsedUrl.href.toLowerCase();
+    const pathname = parsedUrl.pathname.toLowerCase();
+
+    for (const extension of STREAM_EXTENSIONS) {
+      if (pathname.endsWith(`.${extension}`)) return extension;
+      if (href.includes(`.${extension}?`)) return extension;
+      if (href.includes(`.${extension}&`)) return extension;
+      if (href.includes(`.${extension}#`)) return extension;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function getStreamInfoFromUrl(url) {
+  if (!url) return null;
+
+  const lower = url.toLowerCase();
+
+  if (
+    lower.includes(".m3u8") ||
+    lower.includes("application/vnd.apple.mpegurl") ||
+    lower.includes("application/x-mpegurl")
+  ) {
+    return {
+      type: "hls",
+      extension: "m3u8"
+    };
+  }
+
+  const extension = getExtensionFromUrl(url);
+
+  if (extension === "mpd") {
+    return {
+      type: "dash",
+      extension: "mpd"
+    };
+  }
+
+  if (AUDIO_STREAM_EXTENSIONS.includes(extension)) {
+    return {
+      type: "audio",
+      extension
+    };
+  }
+
+  return null;
+}
+
 function getStreamTypeFromUrl(url) {
   if (!url) return null;
 
@@ -22,8 +94,8 @@ function getStreamTypeFromUrl(url) {
   return null;
 }
 
-function rememberStream(tabId, url, type) {
-  if (tabId < 0 || !url || !type) return;
+function rememberStream(tabId, url, streamInfo) {
+  if (tabId < 0 || !url || !streamInfo || !streamInfo.type) return;
 
   if (!streamsByTabId[tabId]) {
     streamsByTabId[tabId] = [];
@@ -36,21 +108,22 @@ function rememberStream(tabId, url, type) {
 
   const stream = {
     url,
-    type,
+    type: streamInfo.type,
+    extension: streamInfo.extension || null,
     foundAt: Date.now()
   };
 
   streams.unshift(stream);
 
-  if (streams.length > 30) {
-    streams.length = 30;
+  if (streams.length > MAX_STREAMS_PER_TAB) {
+    streams.length = MAX_STREAMS_PER_TAB;
   }
 
   console.log("[Media Downloader] Stream found:", stream);
 }
 
-function rememberStreamForActiveCapture(tabId, url, type) {
-  if (tabId < 0 || !url || !type) return;
+function rememberStreamForActiveCapture(tabId, url, streamInfo) {
+  if (tabId < 0 || !url || !streamInfo || !streamInfo.type) return;
 
   const activeCapture = activeCapturesByTabId[tabId];
   if (!activeCapture) return;
@@ -68,7 +141,8 @@ function rememberStreamForActiveCapture(tabId, url, type) {
 
   const capturedStream = {
     url,
-    type,
+    type: streamInfo.type,
+    extension: streamInfo.extension || null,
     captureId: activeCapture.captureId,
     trackTitle: activeCapture.trackTitle || "media",
     foundAt: now
@@ -97,11 +171,11 @@ chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     if (!details || !details.url) return;
 
-    const streamType = getStreamTypeFromUrl(details.url);
-    if (!streamType) return;
+    const streamInfo = getStreamInfoFromUrl(details.url);
+    if (!streamInfo) return;
 
-    rememberStream(details.tabId, details.url, streamType);
-    rememberStreamForActiveCapture(details.tabId, details.url, streamType);
+    rememberStream(details.tabId, details.url, streamInfo);
+    rememberStreamForActiveCapture(details.tabId, details.url, streamInfo);
   },
   {
     urls: ["<all_urls>"]

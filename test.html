@@ -201,24 +201,28 @@
       </a>
     </section>
 
-    <section
+        <section
       class="card"
       data-media-downloader-track
-      data-media-title="Dynamic direct MP3 request"
+      data-media-title="Dynamic hidden MP3 track"
     >
-      <h2>9. Динамический прямой MP3-запрос без видимой ссылки</h2>
+      <h2>9. Скрытый прямой MP3-запрос без ссылки</h2>
+
       <p>
-        Это тест на будущую функцию: ловить не только HLS/DASH, но и прямые аудио-запросы
-        из сетевой активности. В текущей версии этот кейс может не создать кнопку.
+        Здесь нет видимой ссылки и нет audio element. Нажми Play hidden MP3 request.
+        Расширение должно поймать сетевой запрос .mp3 и привязать кнопку скачивания
+        к этой карточке.
       </p>
 
       <div class="button-row">
-        <button id="playDynamicMp3Button" type="button">
-          Play simulated MP3 stream
+        <button id="playHiddenMp3Button" type="button">
+          Play hidden MP3 request
         </button>
       </div>
 
-      <p id="dynamicMp3Status" class="hint">MP3 ещё не запрашивался.</p>
+      <p id="hiddenMp3Status" class="hint">
+        MP3 ещё не запрашивался.
+      </p>
     </section>
   </main>
 <script>
@@ -261,30 +265,29 @@
       "Audio element добавлен. Если MutationObserver работает, на плеере появится кнопка скачивания.";
   });
 
-  const playDynamicMp3Button = document.getElementById("playDynamicMp3Button");
-  const dynamicMp3Status = document.getElementById("dynamicMp3Status");
+    const playHiddenMp3Button = document.getElementById("playHiddenMp3Button");
+  const hiddenMp3Status = document.getElementById("hiddenMp3Status");
 
-  playDynamicMp3Button.addEventListener("click", () => {
-    dynamicMp3Status.textContent = "Создаю скрытый audio и запрашиваю MP3...";
+  if (playHiddenMp3Button && hiddenMp3Status) {
+    playHiddenMp3Button.addEventListener("click", async () => {
+      hiddenMp3Status.textContent = "Отправляю скрытый MP3-запрос...";
 
-    const audio = new Audio(
-      `https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3?hidden=1&t=${Date.now()}`
-    );
+      try {
+        await fetch(
+          `https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3?hiddenMp3=1&t=${Date.now()}`,
+          {
+            mode: "no-cors",
+            cache: "no-store"
+          }
+        );
 
-    audio.preload = "auto";
-    audio.muted = true;
-
-    audio.addEventListener("canplay", () => {
-      dynamicMp3Status.textContent =
-        "MP3 запрошен. В будущей версии расширение сможет привязать такой поток к карточке.";
-    }, { once: true });
-
-    audio.addEventListener("error", () => {
-      dynamicMp3Status.textContent = "Браузер не смог загрузить тестовый MP3.";
-    }, { once: true });
-
-    audio.load();
-  });
+        hiddenMp3Status.textContent =
+          "MP3-запрос отправлен. Если расширение поймало аудио, справа сверху на карточке появится кнопка.";
+      } catch (error) {
+        hiddenMp3Status.textContent = `Ошибка тестового MP3-запроса: ${error.message}`;
+      }
+    });
+  }
 </script>
 </body>
 </html>

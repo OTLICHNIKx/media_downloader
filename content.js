@@ -219,6 +219,55 @@ function injectStyles() {
   style.id = "media-downloader-styles";
 
   style.textContent = `
+  
+    .media-downloader-media-wrapper {
+      position: relative !important;
+    }
+    
+    .media-downloader-video-wrapper {
+      display: inline-block !important;
+      line-height: 0 !important;
+      max-width: max-content !important;
+      vertical-align: top !important;
+    }
+    
+    .media-downloader-video-button {
+      position: absolute !important;
+      top: 10px !important;
+      right: 10px !important;
+      margin-left: 0 !important;
+    
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    
+    .media-downloader-video-wrapper:hover .media-downloader-video-button {
+      opacity: 1 !important;
+      pointer-events: auto !important;
+    }
+    
+    audio.media-downloader-audio-with-button {
+      display: inline-block !important;
+      width: calc(100% - 52px) !important;
+      max-width: 560px !important;
+      vertical-align: middle !important;
+    }
+    
+    .media-downloader-audio-button {
+      position: static !important;
+      display: inline-flex !important;
+      margin-top: 0 !important;
+      margin-left: 8px !important;
+      vertical-align: middle !important;
+      opacity: 1 !important;
+      pointer-events: auto !important;
+    }
+    
+    .media-downloader-video-button .md-icon-symbol,
+    .media-downloader-audio-button .md-icon-symbol {
+      background: rgba(255, 255, 255, 0.85) !important;
+    }
+    
     .media-downloader-icon {
       display: inline-flex !important;
       align-items: center !important;
@@ -293,33 +342,7 @@ function injectStyles() {
       opacity: 1 !important;
       max-width: 80px !important;
     }
-
-    .media-downloader-video-wrapper {
-      position: relative !important;
-      display: inline-block !important;
-      line-height: 0 !important;
-      max-width: max-content !important;
-    }
-
-    .media-downloader-video-button {
-      position: absolute !important;
-      top: 10px !important;
-      right: 10px !important;
-      margin-left: 0 !important;
-
-      opacity: 0 !important;
-      pointer-events: none !important;
-    }
-
-    .media-downloader-video-wrapper:hover .media-downloader-video-button {
-      opacity: 1 !important;
-      pointer-events: auto !important;
-    }
-    
-    .media-downloader-video-button .md-icon-symbol {
-      background: rgba(255, 255, 255, 0.85) !important;
-    }
-    
+   
     .media-downloader-ui-disabled .media-downloader-icon {
       display: none !important;
     }
@@ -343,6 +366,41 @@ function injectStyles() {
   `;
 
   document.documentElement.appendChild(style);
+}
+
+function addIconAfterAudioElement(audioElement, mediaItem) {
+  if (!audioElement || !audioElement.parentNode) return;
+
+  audioElement.classList.add("media-downloader-audio-with-button");
+
+  const nextElement = audioElement.nextElementSibling;
+  const existingIcon =
+    nextElement &&
+    nextElement.classList &&
+    nextElement.classList.contains(MEDIA_DOWNLOADER_ICON_CLASS) &&
+    nextElement.classList.contains("media-downloader-audio-button")
+      ? nextElement
+      : null;
+
+  if (
+    audioElement.hasAttribute(ICON_ADDED_ATTRIBUTE) &&
+    existingIcon &&
+    existingIcon.getAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE) === mediaItem.url
+  ) {
+    return;
+  }
+
+  if (existingIcon) {
+    existingIcon.remove();
+  }
+
+  const icon = createDownloadIcon(mediaItem);
+
+  icon.classList.add("media-downloader-media-button", "media-downloader-audio-button");
+  icon.setAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE, mediaItem.url);
+
+  audioElement.insertAdjacentElement("afterend", icon);
+  audioElement.setAttribute(ICON_ADDED_ATTRIBUTE, "true");
 }
 
 function addIconNearLink(linkElement, mediaItem) {
@@ -379,13 +437,13 @@ function wrapMediaElementIfNeeded(mediaElement) {
   if (
     parent &&
     parent.classList &&
-    parent.classList.contains("media-downloader-video-wrapper")
+    parent.classList.contains("media-downloader-media-wrapper")
   ) {
     return parent;
   }
 
   const wrapper = document.createElement("span");
-  wrapper.className = "media-downloader-video-wrapper";
+  wrapper.className = "media-downloader-media-wrapper media-downloader-video-wrapper";
 
   mediaElement.parentNode.insertBefore(wrapper, mediaElement);
   wrapper.appendChild(mediaElement);
@@ -394,11 +452,26 @@ function wrapMediaElementIfNeeded(mediaElement) {
 }
 
 function addIconOnMediaElement(mediaElement, mediaItem) {
+  if (!mediaElement || !mediaItem) return;
+
+  const tagName = mediaElement.tagName.toLowerCase();
+
+  if (tagName === "audio") {
+    addIconAfterAudioElement(mediaElement, mediaItem);
+    return;
+  }
+
+  if (tagName !== "video") {
+    return;
+  }
+
   const wrapper = wrapMediaElementIfNeeded(mediaElement);
 
   if (!wrapper) return;
 
-  const existingIcon = wrapper.querySelector(`.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-video-button`);
+  const existingIcon = wrapper.querySelector(
+    `.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-video-button`
+  );
 
   if (
     mediaElement.hasAttribute(ICON_ADDED_ATTRIBUTE) &&
@@ -413,7 +486,8 @@ function addIconOnMediaElement(mediaElement, mediaItem) {
   }
 
   const icon = createDownloadIcon(mediaItem);
-  icon.classList.add("media-downloader-video-button");
+
+  icon.classList.add("media-downloader-media-button", "media-downloader-video-button");
   icon.setAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE, mediaItem.url);
 
   wrapper.appendChild(icon);
@@ -488,7 +562,9 @@ function getLatestHlsStream(callback) {
 
 function cleanupBrokenDownloaderMarks() {
   document.querySelectorAll(`[${ICON_ADDED_ATTRIBUTE}]`).forEach((element) => {
-    if (element.tagName.toLowerCase() === "a") {
+    const tagName = element.tagName.toLowerCase();
+
+    if (tagName === "a") {
       const nextElement = element.nextElementSibling;
       const hasIcon =
         nextElement &&
@@ -502,12 +578,30 @@ function cleanupBrokenDownloaderMarks() {
       return;
     }
 
-    if (element.matches("audio, video")) {
+    if (tagName === "audio") {
+      const nextElement = element.nextElementSibling;
+      const hasIcon =
+        nextElement &&
+        nextElement.classList &&
+        nextElement.classList.contains(MEDIA_DOWNLOADER_ICON_CLASS) &&
+        nextElement.classList.contains("media-downloader-audio-button");
+
+      if (!hasIcon) {
+        element.classList.remove("media-downloader-audio-with-button");
+        element.removeAttribute(ICON_ADDED_ATTRIBUTE);
+      }
+
+      return;
+    }
+
+    if (tagName === "video") {
       const parent = element.parentElement;
       const hasIcon =
         parent &&
         parent.querySelector &&
-        parent.querySelector(`.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-video-button`);
+        parent.querySelector(
+          `.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-video-button`
+        );
 
       if (!hasIcon) {
         element.removeAttribute(ICON_ADDED_ATTRIBUTE);

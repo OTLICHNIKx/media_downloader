@@ -66,6 +66,28 @@
       font-size: 13px;
       color: #777;
     }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    button {
+      padding: 9px 12px;
+      border: 1px solid #cfd6dd;
+      border-radius: 10px;
+      background: #fff;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 6px;
+      background: #eef2f4;
+    }
   </style>
 </head>
 <body>
@@ -137,6 +159,67 @@
         Поток ещё не запрашивался.
       </p>
     </section>
+
+
+    <section class="card">
+      <h2>6. Audio element с прямым MP3</h2>
+      <p>
+        Кнопка скачивания должна появиться на аудио-плеере так же, как на видео.
+      </p>
+
+      <audio controls>
+        <source src="https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3" type="audio/mpeg">
+      </audio>
+    </section>
+
+    <section class="card">
+      <h2>7. Динамически добавленный audio element</h2>
+      <p>
+        Нажми кнопку ниже. Расширение должно заметить новый <code>audio</code> через MutationObserver
+        и добавить кнопку скачивания на появившийся плеер.
+      </p>
+
+      <div class="button-row">
+        <button id="injectDynamicAudioButton" type="button">
+          Add dynamic audio
+        </button>
+      </div>
+
+      <div id="dynamicAudioMount"></div>
+      <p id="dynamicAudioStatus" class="hint">Audio element ещё не добавлен.</p>
+    </section>
+
+    <section class="card">
+      <h2>8. DASH manifest .mpd</h2>
+      <p>
+        Это заготовка под будущую поддержку DASH. Сейчас расширение должно хотя бы определить
+        ссылку как <code>.mpd</code> и показать состояние «DASH позже».
+      </p>
+
+      <a href="test_dash/manifest.mpd">
+        Скачать тестовый DASH manifest
+      </a>
+    </section>
+
+    <section
+      class="card"
+      data-media-downloader-track
+      data-media-title="Dynamic direct MP3 request"
+    >
+      <h2>9. Динамический прямой MP3-запрос без видимой ссылки</h2>
+      <p>
+        Это тест на будущую функцию: ловить не только HLS/DASH, но и прямые аудио-запросы
+        из сетевой активности. В текущей версии этот кейс может не создать кнопку.
+      </p>
+
+      <div class="button-row">
+        <button id="playDynamicMp3Button" type="button">
+          Play simulated MP3 stream
+        </button>
+      </div>
+
+      <p id="dynamicMp3Status" class="hint">MP3 ещё не запрашивался.</p>
+    </section>
   </main>
 <script>
   const playDynamicHlsButton = document.getElementById("playDynamicHlsButton");
@@ -161,6 +244,46 @@
     } catch (error) {
       dynamicHlsStatus.textContent = `Ошибка тестового запроса: ${error.message}`;
     }
+  });
+
+  const injectDynamicAudioButton = document.getElementById("injectDynamicAudioButton");
+  const dynamicAudioMount = document.getElementById("dynamicAudioMount");
+  const dynamicAudioStatus = document.getElementById("dynamicAudioStatus");
+
+  injectDynamicAudioButton.addEventListener("click", () => {
+    dynamicAudioMount.innerHTML = `
+      <audio controls>
+        <source src="https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3?dynamicAudio=1&t=${Date.now()}" type="audio/mpeg">
+      </audio>
+    `;
+
+    dynamicAudioStatus.textContent =
+      "Audio element добавлен. Если MutationObserver работает, на плеере появится кнопка скачивания.";
+  });
+
+  const playDynamicMp3Button = document.getElementById("playDynamicMp3Button");
+  const dynamicMp3Status = document.getElementById("dynamicMp3Status");
+
+  playDynamicMp3Button.addEventListener("click", () => {
+    dynamicMp3Status.textContent = "Создаю скрытый audio и запрашиваю MP3...";
+
+    const audio = new Audio(
+      `https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3?hidden=1&t=${Date.now()}`
+    );
+
+    audio.preload = "auto";
+    audio.muted = true;
+
+    audio.addEventListener("canplay", () => {
+      dynamicMp3Status.textContent =
+        "MP3 запрошен. В будущей версии расширение сможет привязать такой поток к карточке.";
+    }, { once: true });
+
+    audio.addEventListener("error", () => {
+      dynamicMp3Status.textContent = "Браузер не смог загрузить тестовый MP3.";
+    }, { once: true });
+
+    audio.load();
   });
 </script>
 </body>

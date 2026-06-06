@@ -28,7 +28,7 @@
         "hls/hls.js",
         "dash/dash.html",
         "dash/dash.css",
-        "dash/dash/js"
+        "dash/dash.js"
       ],
       "matches": [
         "<all_urls>"

@@ -1,25 +1,35 @@
-window.addEventListener("message", (event) => {
-  const hlsPanel = document.getElementById(HLS_PANEL_ID);
-  const dashPanel = document.getElementById(DASH_PANEL_ID);
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD
+  xmlns="urn:mpeg:dash:schema:mpd:2011"
+  type="static"
+  mediaPresentationDuration="PT3S"
+  minBufferTime="PT1S"
+>
+  <Period duration="PT3S">
+    <AdaptationSet
+      contentType="audio"
+      mimeType="audio/mp4"
+      codecs="mp4a.40.2"
+    >
+      <Representation id="audio-96" bandwidth="96000">
+        <SegmentTemplate
+          timescale="1"
+          duration="1"
+          startNumber="1"
+          initialization="audio-96-init.mp4"
+          media="audio-96-$Number$.m4s"
+        />
+      </Representation>
 
-  if (
-    hlsPanel &&
-    event.source === hlsPanel.contentWindow &&
-    event.data &&
-    event.data.source === "MEDIA_DOWNLOADER_HLS" &&
-    event.data.type === "CLOSE"
-  ) {
-    closeHlsDownloaderPanel();
-    return;
-  }
-
-  if (
-    dashPanel &&
-    event.source === dashPanel.contentWindow &&
-    event.data &&
-    event.data.source === "MEDIA_DOWNLOADER_DASH" &&
-    event.data.type === "CLOSE"
-  ) {
-    closeDashDownloaderPanel();
-  }
-});
+      <Representation id="audio-128" bandwidth="128000">
+        <SegmentTemplate
+          timescale="1"
+          duration="1"
+          startNumber="1"
+          initialization="audio-128-init.mp4"
+          media="audio-128-$Number$.m4s"
+        />
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>

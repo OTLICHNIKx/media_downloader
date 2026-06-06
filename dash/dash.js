@@ -259,6 +259,58 @@ function getInheritedSegmentTemplate(representationElement, adaptationSetElement
   );
 }
 
+function getInheritedSegmentList(representationElement, adaptationSetElement) {
+  return (
+    getFirstChildElement(representationElement, "SegmentList") ||
+    getFirstChildElement(adaptationSetElement, "SegmentList")
+  );
+}
+
+function getSegmentUrlValue(segmentUrlElement) {
+  if (!segmentUrlElement) return null;
+
+  return (
+    segmentUrlElement.getAttribute("media") ||
+    segmentUrlElement.getAttribute("sourceURL") ||
+    null
+  );
+}
+
+function buildSegmentListData(segmentListElement, baseUrl) {
+  if (!segmentListElement) return null;
+
+  const initializationElement = getFirstChildElement(segmentListElement, "Initialization");
+  const initializationSourceUrl =
+    initializationElement &&
+    (
+      initializationElement.getAttribute("sourceURL") ||
+      initializationElement.getAttribute("sourceUrl")
+    );
+
+  const initUrl = initializationSourceUrl
+    ? resolveUrl(baseUrl, initializationSourceUrl)
+    : null;
+
+  const segmentUrls = getChildElements(segmentListElement, "SegmentURL")
+    .map((segmentUrlElement) => {
+      const mediaUrl = getSegmentUrlValue(segmentUrlElement);
+
+      if (!mediaUrl) return null;
+
+      return resolveUrl(baseUrl, mediaUrl);
+    })
+    .filter(Boolean);
+
+  if (segmentUrls.length === 0) {
+    throw new Error("SegmentList найден, но внутри нет SegmentURL с media/sourceURL.");
+  }
+
+  return {
+    initUrl,
+    segmentUrls
+  };
+}
+
 function getCombinedBaseUrl(mpdUrl, mpdElement, periodElement, adaptationSetElement, representationElement) {
   let baseUrl = mpdUrl;
 
@@ -446,7 +498,14 @@ function parseAudioRepresentations(mpdText, mpdUrl) {
           adaptationSetElement
         );
 
-        if (!segmentTemplate) return;
+        const segmentList = getInheritedSegmentList(
+          representationElement,
+          adaptationSetElement
+        );
+
+        if (!segmentTemplate && !segmentList) {
+          return;
+        }
 
         const id =
           representationElement.getAttribute("id") ||
@@ -486,40 +545,55 @@ function parseAudioRepresentations(mpdText, mpdUrl) {
           representationElement
         );
 
-        const initializationTemplate = segmentTemplate.getAttribute("initialization");
-        const mediaTemplate = segmentTemplate.getAttribute("media");
-        const startNumber = Number(segmentTemplate.getAttribute("startNumber") || 1);
-        const timescale = Number(segmentTemplate.getAttribute("timescale") || 1);
-        const duration = Number(segmentTemplate.getAttribute("duration") || 0);
-        const segmentTimeline = getFirstChildElement(segmentTemplate, "SegmentTimeline");
+        let initUrl = null;
+        let segmentUrls = [];
+        let segmentSource = "unknown";
 
-        if (!mediaTemplate) {
-          return;
-        }
+        if (segmentTemplate) {
+          const initializationTemplate = segmentTemplate.getAttribute("initialization");
+          const mediaTemplate = segmentTemplate.getAttribute("media");
+          const startNumber = Number(segmentTemplate.getAttribute("startNumber") || 1);
+          const timescale = Number(segmentTemplate.getAttribute("timescale") || 1);
+          const duration = Number(segmentTemplate.getAttribute("duration") || 0);
+          const segmentTimeline = getFirstChildElement(segmentTemplate, "SegmentTimeline");
 
-        const entries = segmentTimeline
-          ? buildTimelineEntries(segmentTimeline, startNumber, timescale, periodDurationSeconds)
-          : buildNumberEntries(startNumber, timescale, duration, periodDurationSeconds);
+          if (!mediaTemplate) {
+            return;
+          }
 
-        const initUrl = initializationTemplate
-          ? resolveUrl(
+          const entries = segmentTimeline
+            ? buildTimelineEntries(segmentTimeline, startNumber, timescale, periodDurationSeconds)
+            : buildNumberEntries(startNumber, timescale, duration, periodDurationSeconds);
+
+          initUrl = initializationTemplate
+            ? resolveUrl(
+                baseUrl,
+                applyTemplate(initializationTemplate, representation, startNumber, null)
+              )
+            : null;
+
+          segmentUrls = entries.map((entry) => {
+            return resolveUrl(
               baseUrl,
-              applyTemplate(initializationTemplate, representation, startNumber, null)
-            )
-          : null;
+              applyTemplate(mediaTemplate, representation, entry.number, entry.time)
+            );
+          });
 
-        const segmentUrls = entries.map((entry) => {
-          return resolveUrl(
-            baseUrl,
-            applyTemplate(mediaTemplate, representation, entry.number, entry.time)
-          );
-        });
+          segmentSource = segmentTimeline ? "SegmentTemplate + SegmentTimeline" : "SegmentTemplate";
+        } else if (segmentList) {
+          const segmentListData = buildSegmentListData(segmentList, baseUrl);
+
+          initUrl = segmentListData.initUrl;
+          segmentUrls = segmentListData.segmentUrls;
+          segmentSource = "SegmentList";
+        }
 
         result.push({
           ...representation,
           initUrl,
           segmentUrls,
           segmentCount: segmentUrls.length,
+          segmentSource,
           outputInfo: getOutputInfo(representation)
         });
       });
@@ -567,6 +641,7 @@ function renderRepresentationDetails(representation, progressInfo = null) {
     `Bandwidth: ${formatBandwidth(representation.bandwidth)}`,
     `Codecs: ${representation.codecs || "unknown"}`,
     `MIME: ${representation.mimeType || "unknown"}`,
+    `Схема сегментов: ${representation.segmentSource || "unknown"}`,
     `Init segment: ${representation.initUrl ? "есть" : "нет"}`,
     `Сегментов: ${representation.segmentCount}`,
     `Тип результата: ${representation.outputInfo.extension}`,
@@ -581,7 +656,7 @@ function renderRepresentationDetails(representation, progressInfo = null) {
 
   lines.push("");
   lines.push(
-    "Ограничение: сейчас поддерживается только audio-only DASH через SegmentTemplate. " +
+    "Ограничение: сейчас поддерживается только audio-only DASH через SegmentTemplate или SegmentList. " +
     "Видео+аудио без muxing пока не собираются."
   );
 
@@ -739,8 +814,8 @@ async function initializeDashDownloader() {
     if (audioRepresentations.length === 0) {
       setStatus("В MPD не найдено audio-only representations, которые можно скачать.");
       setDetails(
-        "Сейчас поддерживается только audio AdaptationSet/Representation с SegmentTemplate. " +
-        "SegmentBase, SegmentList, DRM и сборка video+audio пока не реализованы."
+        "Сейчас поддерживается только audio AdaptationSet/Representation с SegmentTemplate или SegmentList. " +
+        "SegmentBase, DRM и сборка video+audio пока не реализованы."
       );
       setProgress(0);
       return;

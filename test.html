@@ -192,12 +192,22 @@
     <section class="card">
       <h2>8. DASH manifest .mpd</h2>
       <p>
-        Это заготовка под будущую поддержку DASH. Сейчас расширение должно хотя бы определить
-        ссылку как <code>.mpd</code> и показать состояние «DASH позже».
+        Это тестовый DASH MPD через SegmentTemplate. Расширение должно открыть DASH Downloader.
       </p>
 
       <a href="test_dash/manifest.mpd">
         Скачать тестовый DASH manifest
+      </a>
+    </section>
+      <section class="card">
+      <h2>8.1. DASH SegmentList manifest .mpd</h2>
+      <p>
+        Это DASH MPD, где audio-сегменты перечислены через SegmentList.
+        DASH Downloader должен показать audio representations и скачать выбранное.
+      </p>
+
+      <a href="test_dash/segment-list.mpd">
+        Скачать тестовый DASH SegmentList manifest
       </a>
     </section>
 

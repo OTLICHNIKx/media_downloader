@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD
+  xmlns="urn:mpeg:dash:schema:mpd:2011"
+  type="static"
+  mediaPresentationDuration="PT3S"
+  minBufferTime="PT1S"
+>
+  <Period duration="PT3S">
+    <AdaptationSet
+      contentType="audio"
+      mimeType="audio/mp4"
+      codecs="mp4a.40.2"
+    >
+      <Representation id="audio-list-64" bandwidth="64000">
+        <BaseURL>segment-list/</BaseURL>
+
+        <SegmentList>
+          <Initialization sourceURL="audio-list-init.mp4" />
+          <SegmentURL media="audio-list-1.m4s" />
+          <SegmentURL media="audio-list-2.m4s" />
+          <SegmentURL media="audio-list-3.m4s" />
+        </SegmentList>
+      </Representation>
+
+      <Representation id="audio-list-128" bandwidth="128000">
+        <BaseURL>segment-list/</BaseURL>
+
+        <SegmentList>
+          <Initialization sourceURL="audio-list-128-init.mp4" />
+          <SegmentURL media="audio-list-128-1.m4s" />
+          <SegmentURL media="audio-list-128-2.m4s" />
+          <SegmentURL media="audio-list-128-3.m4s" />
+        </SegmentList>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>

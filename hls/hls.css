@@ -159,3 +159,80 @@ body.embed-mode .details {
   overflow: auto;
   font-size: 12px;
 }
+
+.quality-controls {
+  margin-bottom: 14px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f5f7f8;
+}
+
+.quality-select {
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 10px;
+  border: 1px solid #cfd6dd;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #222;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.primary-button,
+.secondary-button {
+  padding: 9px 12px;
+  border: none;
+  border-radius: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primary-button {
+  background: #1f9d55;
+  color: #ffffff;
+}
+
+.primary-button:disabled {
+  background: #a8cdb8;
+  cursor: not-allowed;
+}
+
+.secondary-button {
+  background: #eef2f4;
+  color: #333;
+}
+
+.secondary-button:hover {
+  background: #e0e6ea;
+}
+
+body.embed-mode .quality-controls {
+  margin-bottom: 10px;
+  padding: 10px;
+}
+
+body.embed-mode .quality-select {
+  padding: 7px 8px;
+  font-size: 12px;
+}
+
+body.embed-mode .actions {
+  margin-top: 8px;
+}
+
+body.embed-mode .primary-button,
+body.embed-mode .secondary-button {
+  padding: 7px 9px;
+  font-size: 12px;
+}
+
+body.embed-mode .details {
+  max-height: 135px;
+}

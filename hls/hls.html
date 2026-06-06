@@ -26,6 +26,21 @@
         <div id="sourceUrl" class="source-url">—</div>
       </div>
 
+      <div id="qualityControls" class="quality-controls" hidden>
+        <label class="label" for="variantSelect">Качество:</label>
+
+        <select id="variantSelect" class="quality-select"></select>
+
+        <div class="actions">
+          <button id="downloadButton" class="primary-button" type="button" disabled>
+            Скачать выбранное
+          </button>
+
+          <button id="cancelDownloadButton" class="secondary-button" type="button" hidden>
+            Отменить
+          </button>
+        </div>
+      </div>
       <div class="progress-wrap">
         <div id="progressBar" class="progress-bar"></div>
       </div>

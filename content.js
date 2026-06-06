@@ -968,8 +968,8 @@ function openHlsDownloaderPanel(mediaItem) {
   iframe.style.position = "fixed";
   iframe.style.right = "18px";
   iframe.style.bottom = "18px";
-  iframe.style.width = "420px";
-  iframe.style.height = "320px";
+  iframe.style.width = "440px";
+  iframe.style.height = "430px";
   iframe.style.border = "none";
   iframe.style.borderRadius = "16px";
   iframe.style.background = "#ffffff";
@@ -979,23 +979,6 @@ function openHlsDownloaderPanel(mediaItem) {
 
   document.documentElement.appendChild(iframe);
 }
-
-document.addEventListener(
-  "pointerover",
-  (event) => {
-    const target = event.target;
-
-    if (target instanceof Element && target.closest(`.${MEDIA_DOWNLOADER_ICON_CLASS}`)) {
-      return;
-    }
-
-    const trackElement = findTrackCandidateFromTarget(target);
-    if (!trackElement) return;
-
-    startStreamCaptureForTrack(trackElement, "pointerover");
-  },
-  true
-);
 
 document.addEventListener(
   "pointerdown",

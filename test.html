@@ -244,6 +244,33 @@
             Скачать тестовый HLS master playlist
           </a>
     </section>
+          <section
+      class="card"
+      data-media-adapter-card
+      data-media-title="Adapter hidden MP3 track"
+      data-media-author="Test Artist"
+    >
+      <h2>10. Site adapter: карточка без data-media-downloader-track</h2>
+
+      <p>
+        Эта карточка имитирует сайт вроде SoundCloud/VK/YouTube. У неё нет
+        <code>data-media-downloader-track</code>. Расширение должно само распознать её
+        через adapter, запустить capture при клике и привязать найденный MP3 к карточке.
+      </p>
+
+      <p class="media-author">Test Artist</p>
+      <p class="media-title">Adapter hidden MP3 track</p>
+
+      <div class="button-row">
+        <button id="playAdapterMp3Button" type="button">
+          Play adapter MP3 request
+        </button>
+      </div>
+
+      <p id="adapterMp3Status" class="hint">
+        Adapter MP3 ещё не запрашивался.
+      </p>
+    </section>
   </main>
 <script>
   const playDynamicHlsButton = document.getElementById("playDynamicHlsButton");
@@ -305,6 +332,29 @@
           "MP3-запрос отправлен. Если расширение поймало аудио, справа сверху на карточке появится кнопка.";
       } catch (error) {
         hiddenMp3Status.textContent = `Ошибка тестового MP3-запроса: ${error.message}`;
+      }
+    });
+  }
+    const playAdapterMp3Button = document.getElementById("playAdapterMp3Button");
+  const adapterMp3Status = document.getElementById("adapterMp3Status");
+
+  if (playAdapterMp3Button && adapterMp3Status) {
+    playAdapterMp3Button.addEventListener("click", async () => {
+      adapterMp3Status.textContent = "Отправляю MP3-запрос из adapter-карточки...";
+
+      try {
+        await fetch(
+          `https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3?adapterTest=1&t=${Date.now()}`,
+          {
+            mode: "no-cors",
+            cache: "no-store"
+          }
+        );
+
+        adapterMp3Status.textContent =
+          "MP3-запрос отправлен. Если adapter сработал, справа сверху на карточке появится кнопка.";
+      } catch (error) {
+        adapterMp3Status.textContent = `Ошибка adapter MP3-запроса: ${error.message}`;
       }
     });
   }

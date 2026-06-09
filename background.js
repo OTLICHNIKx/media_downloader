@@ -2,7 +2,7 @@ const streamsByTabId = {};
 const activeCapturesByTabId = {};
 const capturedStreamsByTabId = {};
 const diagnosticsByTabId = {};
-
+const diagnosticSignaturesByTabId = {};
 const MAX_STREAMS_PER_TAB = 50;
 const MAX_DIAGNOSTICS_PER_TAB = 30;
 
@@ -306,12 +306,48 @@ function getStreamInfoFromUrl(url) {
   }
 }
 
+function getDiagnosticSignature(code, message, data = {}) {
+  const stableData = {
+    host: data.host || null,
+    adapter: data.adapter || null,
+    visibleLinks: data.visibleLinks ?? null,
+    inlineLinkMediaFound: data.inlineLinkMediaFound ?? null,
+    visibleMediaElements: data.visibleMediaElements ?? null,
+    inlineMediaFound: data.inlineMediaFound ?? null,
+    latestHlsChecks: data.latestHlsChecks ?? null,
+    adapterCandidates: data.adapterCandidates ?? null,
+    buttonsOnPage: data.buttonsOnPage ?? null,
+    url: data.url || null,
+    contentType: data.contentType || null,
+    requestType: data.requestType || null,
+    statusCode: data.statusCode || null
+  };
+
+  return JSON.stringify({
+    code,
+    message,
+    data: stableData
+  });
+}
+
 function rememberDiagnostic(tabId, code, message, data = {}) {
   if (typeof tabId !== "number" || tabId < 0) return;
 
   if (!diagnosticsByTabId[tabId]) {
     diagnosticsByTabId[tabId] = [];
   }
+
+  if (!diagnosticSignaturesByTabId[tabId]) {
+    diagnosticSignaturesByTabId[tabId] = new Set();
+  }
+
+  const signature = getDiagnosticSignature(code, message, data);
+
+  if (diagnosticSignaturesByTabId[tabId].has(signature)) {
+    return;
+  }
+
+  diagnosticSignaturesByTabId[tabId].add(signature);
 
   const diagnostics = diagnosticsByTabId[tabId];
 
@@ -502,6 +538,17 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   delete activeCapturesByTabId[tabId];
   delete capturedStreamsByTabId[tabId];
   delete diagnosticsByTabId[tabId];
+  delete diagnosticSignaturesByTabId[tabId];
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== "loading") return;
+
+  delete streamsByTabId[tabId];
+  delete activeCapturesByTabId[tabId];
+  delete capturedStreamsByTabId[tabId];
+  delete diagnosticsByTabId[tabId];
+  delete diagnosticSignaturesByTabId[tabId];
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

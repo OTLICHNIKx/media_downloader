@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Media Downloader Panel</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <main class="panel">
+    <header class="panel-header">
+      <div>
+        <h1>Media Downloader</h1>
+        <p id="pageInfo" class="page-info">Загрузка...</p>
+      </div>
+
+      <div class="header-actions">
+        <button id="refreshButton" class="button" type="button">
+          Обновить
+        </button>
+
+        <button id="clearDiagnosticsButton" class="button secondary" type="button">
+          Очистить диагностику
+        </button>
+      </div>
+    </header>
+
+    <section class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-label">Всего</span>
+        <strong id="totalCount">0</strong>
+      </div>
+
+      <div class="stat-card">
+        <span class="stat-label">Audio</span>
+        <strong id="audioCount">0</strong>
+      </div>
+
+      <div class="stat-card">
+        <span class="stat-label">Video</span>
+        <strong id="videoCount">0</strong>
+      </div>
+
+      <div class="stat-card">
+        <span class="stat-label">HLS</span>
+        <strong id="hlsCount">0</strong>
+      </div>
+
+      <div class="stat-card">
+        <span class="stat-label">DASH</span>
+        <strong id="dashCount">0</strong>
+      </div>
+    </section>
+
+    <section class="filters">
+      <button class="filter-button active" type="button" data-filter="all">Все</button>
+      <button class="filter-button" type="button" data-filter="audio">Audio</button>
+      <button class="filter-button" type="button" data-filter="video">Video</button>
+      <button class="filter-button" type="button" data-filter="hls">HLS</button>
+      <button class="filter-button" type="button" data-filter="dash">DASH</button>
+    </section>
+
+    <section class="content-grid">
+      <section class="streams-section">
+        <h2>Найденные потоки</h2>
+        <div id="streamsList" class="streams-list empty">
+          Потоки пока не найдены. Запусти воспроизведение на странице и нажми «Обновить».
+        </div>
+      </section>
+
+      <aside class="diagnostics-section">
+        <h2>Диагностика</h2>
+        <div id="diagnosticsList" class="diagnostics-list empty">
+          Диагностики пока нет.
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script src="panel.js"></script>
+</body>
+</html>

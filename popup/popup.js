@@ -5,7 +5,7 @@ const streamsListElement = document.getElementById("streamsList");
 const diagnosticsListElement = document.getElementById("diagnosticsList");
 const refreshButtonElement = document.getElementById("refreshButton");
 const clearButtonElement = document.getElementById("clearButton");
-
+const openPanelButtonElement = document.getElementById("openPanelButton");
 let currentTab = null;
 
 function getDisabledSites(callback) {
@@ -315,6 +315,23 @@ function renderDiagnostics(diagnostics) {
   });
 }
 
+function openStreamsPanel() {
+  if (!currentTab || typeof currentTab.id !== "number") {
+    setStatus("Не удалось определить текущую вкладку.");
+    return;
+  }
+
+  const params = new URLSearchParams({
+    tabId: String(currentTab.id),
+    tabUrl: currentTab.url || "",
+    title: currentTab.title || ""
+  });
+
+  chrome.tabs.create({
+    url: chrome.runtime.getURL(`panel/panel.html?${params.toString()}`)
+  });
+}
+
 function refreshMediaState() {
   if (!currentTab || typeof currentTab.id !== "number") return;
 
@@ -394,6 +411,7 @@ async function initPopup() {
   });
 
   refreshButtonElement.addEventListener("click", refreshMediaState);
+  openPanelButtonElement.addEventListener("click", openStreamsPanel);
   clearButtonElement.addEventListener("click", clearDiagnostics);
 
   refreshMediaState();

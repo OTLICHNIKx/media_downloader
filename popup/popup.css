@@ -215,3 +215,18 @@ h1 {
   opacity: 0.6;
   cursor: default;
 }
+
+.panel-button {
+  padding: 7px 10px;
+  border: 1px solid #d4dbe2;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #222;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.panel-button:hover {
+  background: #f0f4f7;
+}

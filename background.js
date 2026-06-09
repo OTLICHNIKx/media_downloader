@@ -3,6 +3,7 @@ const activeCapturesByTabId = {};
 const capturedStreamsByTabId = {};
 const diagnosticsByTabId = {};
 const diagnosticSignaturesByTabId = {};
+const scanSummariesByTabId = {};
 const MAX_STREAMS_PER_TAB = 50;
 const MAX_DIAGNOSTICS_PER_TAB = 30;
 
@@ -649,6 +650,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   delete capturedStreamsByTabId[tabId];
   delete diagnosticsByTabId[tabId];
   delete diagnosticSignaturesByTabId[tabId];
+  delete scanSummariesByTabId[tabId];
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -659,6 +661,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   delete capturedStreamsByTabId[tabId];
   delete diagnosticsByTabId[tabId];
   delete diagnosticSignaturesByTabId[tabId];
+  delete scanSummariesByTabId[tabId];
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -734,16 +737,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
     if (message.type === "GET_MEDIA_DOWNLOADER_STATE") {
-    const tabId = message.tabId;
+      const tabId = message.tabId;
 
-    sendResponse({
-      ok: true,
-      streams: streamsByTabId[tabId] || [],
-      diagnostics: diagnosticsByTabId[tabId] || []
-    });
+      sendResponse({
+        ok: true,
+        streams: streamsByTabId[tabId] || [],
+        diagnostics: diagnosticsByTabId[tabId] || [],
+        scanSummary: scanSummariesByTabId[tabId] || null
+      });
 
-    return;
-  }
+      return;
+    }
 
   if (message.type === "CLEAR_MEDIA_DOWNLOADER_STATE") {
     const tabId = message.tabId;
@@ -759,16 +763,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
     if (message.type === "CLEAR_MEDIA_DOWNLOADER_DIAGNOSTICS") {
-    const tabId = message.tabId;
+      const tabId = message.tabId;
 
-    diagnosticsByTabId[tabId] = [];
+      diagnosticsByTabId[tabId] = [];
 
-    sendResponse({
-      ok: true
-    });
+      sendResponse({
+        ok: true
+      });
 
-    return;
+      return;
   }
+    if (message.type === "REPORT_MEDIA_DOWNLOADER_SCAN_SUMMARY") {
+      const tabId = sender.tab?.id ?? message.tabId;
+
+      if (typeof tabId === "number" && tabId >= 0) {
+        scanSummariesByTabId[tabId] = {
+          message: message.message || "Текущий скан страницы",
+          data: message.data || {},
+          updatedAt: Date.now()
+        };
+      }
+
+      sendResponse({
+        ok: true
+      });
+
+      return;
+    }
+
 
   if (message.type === "REPORT_MEDIA_DOWNLOADER_DIAGNOSTIC") {
     const tabId = sender.tab?.id ?? message.tabId;

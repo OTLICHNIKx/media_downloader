@@ -16,6 +16,7 @@ let mediaDownloaderLastLocation = window.location.href;
 
 let mediaDownloaderUiEnabled = true;
 let mediaDownloaderLastDiagnosticReportAt = 0;
+let mediaDownloaderLastDiagnosticReportAt = 0;
 const HLS_PANEL_ID = "media-downloader-hls-panel";
 const DASH_PANEL_ID = "media-downloader-dash-panel";
 const SUPPORTED_EXTENSIONS = [
@@ -1088,6 +1089,29 @@ function enrichMediaItemWithTrackMetadata(mediaItem, trackElement) {
   };
 }
 
+function reportMediaDownloaderScanSummary(message, data = {}) {
+  const now = Date.now();
+
+  if (now - mediaDownloaderLastScanSummaryReportAt < 1500) {
+    return;
+  }
+
+  mediaDownloaderLastScanSummaryReportAt = now;
+
+  chrome.runtime.sendMessage(
+    {
+      type: "REPORT_MEDIA_DOWNLOADER_SCAN_SUMMARY",
+      message,
+      data
+    },
+    () => {
+      if (chrome.runtime.lastError) {
+        // background может быть временно недоступен — игнорируем
+      }
+    }
+  );
+}
+
 function reportMediaDownloaderDiagnostic(code, message, data = {}) {
   const now = Date.now();
 
@@ -1203,11 +1227,10 @@ function scanAndAddIcons() {
 
   const totalDirectFound = stats.inlineLinkMediaFound + stats.inlineMediaFound;
 
-  reportMediaDownloaderDiagnostic(
-    "scan-summary",
+  reportMediaDownloaderScanSummary(
     totalDirectFound > 0
-      ? `Content scan: найдено прямых media-элементов: ${totalDirectFound}.`
-      : "Content scan: прямые видимые media-ссылки не найдены. Открой popup — поток может быть найден через Network/MIME.",
+      ? `Текущий скан: прямых media-элементов на странице: ${totalDirectFound}.`
+      : "Текущий скан: прямые видимые media-ссылки не найдены. Потоки могут быть найдены через Network/MIME.",
     stats
   );
 }

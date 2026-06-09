@@ -23,7 +23,7 @@ const targetTitle = params.get("title") || "";
 let currentFilter = "all";
 let currentStreams = [];
 let currentDiagnostics = [];
-
+let currentScanSummary = null;
 function formatStreamType(stream) {
   if (!stream) return "Media";
 
@@ -294,16 +294,63 @@ function renderStreams() {
   });
 }
 
+function getScanSummaryParts(scanSummary) {
+  if (!scanSummary || !scanSummary.data) return [];
+
+  const data = scanSummary.data;
+  const parts = [];
+
+  const directFound =
+    Number(data.inlineLinkMediaFound || 0) +
+    Number(data.inlineMediaFound || 0);
+
+  parts.push(`прямые media: ${directFound}`);
+  parts.push(`видимые ссылки: ${data.visibleLinks || 0}`);
+  parts.push(`audio/video элементов: ${data.visibleMediaElements || 0}`);
+  parts.push(`кнопок на странице: ${data.buttonsOnPage || 0}`);
+
+  if (data.adapter) {
+    parts.push(`adapter: ${data.adapter}`);
+  }
+
+  if (scanSummary.updatedAt) {
+    parts.push(`обновлено: ${formatTime(scanSummary.updatedAt)}`);
+  }
+
+  return parts;
+}
+
 function renderDiagnostics() {
   diagnosticsListElement.innerHTML = "";
 
-  if (!currentDiagnostics || currentDiagnostics.length === 0) {
+  const hasScanSummary = Boolean(currentScanSummary);
+  const hasDiagnostics = currentDiagnostics && currentDiagnostics.length > 0;
+
+  if (!hasScanSummary && !hasDiagnostics) {
     diagnosticsListElement.className = "diagnostics-list empty";
     diagnosticsListElement.textContent = "Диагностики пока нет.";
     return;
   }
 
   diagnosticsListElement.className = "diagnostics-list";
+
+  if (hasScanSummary) {
+    const card = document.createElement("div");
+    card.className = "diagnostic-card";
+
+    const title = document.createElement("div");
+    title.className = "diagnostic-title";
+    title.textContent = currentScanSummary.message || "Текущий скан страницы";
+
+    const meta = document.createElement("div");
+    meta.className = "diagnostic-meta";
+    meta.textContent = getScanSummaryParts(currentScanSummary).join(" · ");
+
+    card.appendChild(title);
+    card.appendChild(meta);
+
+    diagnosticsListElement.appendChild(card);
+  }
 
   currentDiagnostics.slice(0, 20).forEach((diagnostic) => {
     const card = document.createElement("div");
@@ -352,12 +399,14 @@ function refreshState() {
       if (!response || !response.ok) {
         currentStreams = [];
         currentDiagnostics = [];
+        currentScanSummary = null;
         renderAll();
         return;
       }
 
       currentStreams = response.streams || [];
       currentDiagnostics = response.diagnostics || [];
+      currentScanSummary = response.scanSummary || null;
 
       renderAll();
     }

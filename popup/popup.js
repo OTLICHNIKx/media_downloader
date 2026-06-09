@@ -279,16 +279,63 @@ function renderStreams(streams) {
   });
 }
 
-function renderDiagnostics(diagnostics) {
+function getScanSummaryParts(scanSummary) {
+  if (!scanSummary || !scanSummary.data) return [];
+
+  const data = scanSummary.data;
+  const parts = [];
+
+  const directFound =
+    Number(data.inlineLinkMediaFound || 0) +
+    Number(data.inlineMediaFound || 0);
+
+  parts.push(`прямые: ${directFound}`);
+  parts.push(`видимые ссылки: ${data.visibleLinks || 0}`);
+  parts.push(`audio/video: ${data.visibleMediaElements || 0}`);
+  parts.push(`кнопок: ${data.buttonsOnPage || 0}`);
+
+  if (data.adapter) {
+    parts.push(`adapter: ${data.adapter}`);
+  }
+
+  if (scanSummary.updatedAt) {
+    parts.push(formatTime(scanSummary.updatedAt));
+  }
+
+  return parts;
+}
+
+function renderDiagnostics(diagnostics, scanSummary = null) {
   diagnosticsListElement.innerHTML = "";
 
-  if (!diagnostics || diagnostics.length === 0) {
+  const hasScanSummary = Boolean(scanSummary);
+  const hasDiagnostics = diagnostics && diagnostics.length > 0;
+
+  if (!hasScanSummary && !hasDiagnostics) {
     diagnosticsListElement.className = "list-box empty";
     diagnosticsListElement.textContent = "Диагностики пока нет.";
     return;
   }
 
   diagnosticsListElement.className = "list-box";
+
+  if (hasScanSummary) {
+    const item = document.createElement("div");
+    item.className = "diagnostic-item";
+
+    const title = document.createElement("div");
+    title.className = "diagnostic-title";
+    title.textContent = scanSummary.message || "Текущий скан страницы";
+
+    const meta = document.createElement("div");
+    meta.className = "diagnostic-meta";
+    meta.textContent = getScanSummaryParts(scanSummary).join(" · ");
+
+    item.appendChild(title);
+    item.appendChild(meta);
+
+    diagnosticsListElement.appendChild(item);
+  }
 
   diagnostics.slice(0, 8).forEach((diagnostic) => {
     const item = document.createElement("div");
@@ -348,7 +395,7 @@ function refreshMediaState() {
       }
 
       renderStreams(response.streams || []);
-      renderDiagnostics(response.diagnostics || []);
+      renderDiagnostics(response.diagnostics || [], response.scanSummary || null);
     }
   );
 }
@@ -363,6 +410,7 @@ function clearDiagnostics() {
     },
     () => {
       refreshMediaState();
+
     }
   );
 }
@@ -415,6 +463,9 @@ async function initPopup() {
   clearButtonElement.addEventListener("click", clearDiagnostics);
 
   refreshMediaState();
+  setInterval(() => {
+    refreshMediaState();
+  }, 3000);
 }
 
 initPopup();

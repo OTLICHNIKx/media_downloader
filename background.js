@@ -1,8 +1,10 @@
 const streamsByTabId = {};
 const activeCapturesByTabId = {};
 const capturedStreamsByTabId = {};
+const diagnosticsByTabId = {};
 
-const MAX_STREAMS_PER_TAB = 30;
+const MAX_STREAMS_PER_TAB = 50;
+const MAX_DIAGNOSTICS_PER_TAB = 30;
 
 const AUDIO_STREAM_EXTENSIONS = [
   "mp3",
@@ -14,10 +16,80 @@ const AUDIO_STREAM_EXTENSIONS = [
   "flac"
 ];
 
-const STREAM_EXTENSIONS = [
+const VIDEO_STREAM_EXTENSIONS = [
+  "mp4",
+  "webm",
+  "m4v",
+  "mov"
+];
+
+const MANIFEST_STREAM_EXTENSIONS = [
   "m3u8",
-  "mpd",
-  ...AUDIO_STREAM_EXTENSIONS
+  "mpd"
+];
+
+const STREAM_EXTENSIONS = [
+  ...MANIFEST_STREAM_EXTENSIONS,
+  ...AUDIO_STREAM_EXTENSIONS,
+  ...VIDEO_STREAM_EXTENSIONS
+];
+
+const MEDIA_MIME_RULES = [
+  {
+    includes: ["application/vnd.apple.mpegurl", "application/x-mpegurl", "audio/mpegurl", "audio/x-mpegurl"],
+    type: "hls",
+    extension: "m3u8"
+  },
+  {
+    includes: ["application/dash+xml"],
+    type: "dash",
+    extension: "mpd"
+  },
+  {
+    includes: ["audio/mpeg", "audio/mp3"],
+    type: "audio",
+    extension: "mp3"
+  },
+  {
+    includes: ["audio/mp4", "audio/x-m4a"],
+    type: "audio",
+    extension: "m4a"
+  },
+  {
+    includes: ["audio/aac"],
+    type: "audio",
+    extension: "aac"
+  },
+  {
+    includes: ["audio/ogg", "application/ogg"],
+    type: "audio",
+    extension: "ogg"
+  },
+  {
+    includes: ["audio/opus"],
+    type: "audio",
+    extension: "opus"
+  },
+  {
+    includes: ["audio/wav", "audio/x-wav", "audio/wave"],
+    type: "audio",
+    extension: "wav"
+  },
+  {
+    includes: ["audio/flac"],
+    type: "audio",
+    extension: "flac"
+  },
+  {
+    includes: ["video/mp4"],
+    type: "video",
+    extension: "mp4"
+  },
+  {
+    includes: ["video/webm"],
+    type: "video",
+    extension: "webm"
+  }
 ];
 
 function getExtensionFromUrl(url) {
@@ -31,6 +103,7 @@ function getExtensionFromUrl(url) {
       if (href.includes(`.${extension}?`)) return extension;
       if (href.includes(`.${extension}&`)) return extension;
       if (href.includes(`.${extension}#`)) return extension;
+      if (href.includes(`%2e${extension}`)) return extension;
     }
 
     return null;
@@ -39,23 +112,15 @@ function getExtensionFromUrl(url) {
   }
 }
 
-function getStreamInfoFromUrl(url) {
-  if (!url) return null;
+function getStreamInfoFromExtension(extension) {
+  if (!extension) return null;
 
-  const lower = url.toLowerCase();
-
-  if (
-    lower.includes(".m3u8") ||
-    lower.includes("application/vnd.apple.mpegurl") ||
-    lower.includes("application/x-mpegurl")
-  ) {
+  if (extension === "m3u8") {
     return {
       type: "hls",
       extension: "m3u8"
     };
   }
-
-  const extension = getExtensionFromUrl(url);
 
   if (extension === "mpd") {
     return {
@@ -71,30 +136,202 @@ function getStreamInfoFromUrl(url) {
     };
   }
 
+  if (VIDEO_STREAM_EXTENSIONS.includes(extension)) {
+    return {
+      type: "video",
+      extension
+    };
+  }
+
   return null;
 }
 
-function getStreamTypeFromUrl(url) {
-  if (!url) return null;
+function getStreamInfoFromContentType(contentType) {
+  if (!contentType) return null;
 
-  const lower = url.toLowerCase();
+  const cleanContentType = contentType.toLowerCase().split(";")[0].trim();
+
+  for (const rule of MEDIA_MIME_RULES) {
+    if (rule.includes.some((mime) => cleanContentType.includes(mime))) {
+      return {
+        type: rule.type,
+        extension: rule.extension,
+        contentType: cleanContentType
+      };
+    }
+  }
+
+  return null;
+}
+
+function getHeaderValue(responseHeaders, headerName) {
+  if (!Array.isArray(responseHeaders)) return "";
+
+  const header = responseHeaders.find((item) => {
+    return item.name && item.name.toLowerCase() === headerName.toLowerCase();
+  });
+
+  return header ? header.value || "" : "";
+}
+
+function getFilenameFromContentDisposition(contentDisposition) {
+  if (!contentDisposition) return "";
+
+  const utfMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utfMatch) {
+    try {
+      return decodeURIComponent(utfMatch[1]);
+    } catch {
+      return utfMatch[1];
+    }
+  }
+
+  const normalMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  return normalMatch ? normalMatch[1] : "";
+}
+
+function getStreamInfoFromHeaders(responseHeaders) {
+  const contentType = getHeaderValue(responseHeaders, "content-type");
+  const fromContentType = getStreamInfoFromContentType(contentType);
+
+  if (fromContentType) {
+    return fromContentType;
+  }
+
+  const contentDisposition = getHeaderValue(responseHeaders, "content-disposition");
+  const filename = getFilenameFromContentDisposition(contentDisposition);
+  const extension = getExtensionFromUrl(`https://local.test/${filename}`);
+
+  return getStreamInfoFromExtension(extension);
+}
+
+function getStreamInfoFromQueryParams(parsedUrl) {
+  const values = [];
+
+  parsedUrl.searchParams.forEach((value, key) => {
+    values.push(`${key}=${value}`);
+  });
+
+  const queryText = values.join("&").toLowerCase();
+
+  if (!queryText) return null;
 
   if (
-    lower.includes(".m3u8") ||
-    lower.includes("application/vnd.apple.mpegurl") ||
-    lower.includes("application/x-mpegurl")
+    queryText.includes("m3u8") ||
+    queryText.includes("mpegurl") ||
+    queryText.includes("hls")
   ) {
-    return "hls";
+    return {
+      type: "hls",
+      extension: "m3u8"
+    };
   }
 
-  if (lower.includes(".mpd")) {
-    return "dash";
+  if (
+    queryText.includes("mpd") ||
+    queryText.includes("dash")
+  ) {
+    return {
+      type: "dash",
+      extension: "mpd"
+    };
+  }
+
+  for (const extension of AUDIO_STREAM_EXTENSIONS) {
+    if (
+      queryText.includes(`format=${extension}`) ||
+      queryText.includes(`ext=${extension}`) ||
+      queryText.includes(`type=${extension}`) ||
+      queryText.includes(`audio/${extension}`)
+    ) {
+      return {
+        type: "audio",
+        extension
+      };
+    }
+  }
+
+  for (const extension of VIDEO_STREAM_EXTENSIONS) {
+    if (
+      queryText.includes(`format=${extension}`) ||
+      queryText.includes(`ext=${extension}`) ||
+      queryText.includes(`type=${extension}`) ||
+      queryText.includes(`video/${extension}`)
+    ) {
+      return {
+        type: "video",
+        extension
+      };
+    }
   }
 
   return null;
 }
 
-function rememberStream(tabId, url, streamInfo) {
+function getStreamInfoFromUrl(url) {
+  if (!url) return null;
+
+  try {
+    const parsedUrl = new URL(url);
+    const lower = parsedUrl.href.toLowerCase();
+
+    if (
+      lower.includes(".m3u8") ||
+      lower.includes("application/vnd.apple.mpegurl") ||
+      lower.includes("application/x-mpegurl")
+    ) {
+      return {
+        type: "hls",
+        extension: "m3u8"
+      };
+    }
+
+    if (lower.includes(".mpd") || lower.includes("application/dash+xml")) {
+      return {
+        type: "dash",
+        extension: "mpd"
+      };
+    }
+
+    const extension = getExtensionFromUrl(url);
+    const fromExtension = getStreamInfoFromExtension(extension);
+
+    if (fromExtension) {
+      return fromExtension;
+    }
+
+    return getStreamInfoFromQueryParams(parsedUrl);
+  } catch {
+    return null;
+  }
+}
+
+function rememberDiagnostic(tabId, code, message, data = {}) {
+  if (typeof tabId !== "number" || tabId < 0) return;
+
+  if (!diagnosticsByTabId[tabId]) {
+    diagnosticsByTabId[tabId] = [];
+  }
+
+  const diagnostics = diagnosticsByTabId[tabId];
+
+  const diagnostic = {
+    code,
+    message,
+    data,
+    createdAt: Date.now()
+  };
+
+  diagnostics.unshift(diagnostic);
+
+  if (diagnostics.length > MAX_DIAGNOSTICS_PER_TAB) {
+    diagnostics.length = MAX_DIAGNOSTICS_PER_TAB;
+  }
+
+  console.log("[Media Downloader] Diagnostic:", diagnostic);
+}
+
+function rememberStream(tabId, url, streamInfo, meta = {}) {
   if (tabId < 0 || !url || !streamInfo || !streamInfo.type) return;
 
   if (!streamsByTabId[tabId]) {
@@ -103,13 +340,36 @@ function rememberStream(tabId, url, streamInfo) {
 
   const streams = streamsByTabId[tabId];
 
-  const alreadyExists = streams.some((stream) => stream.url === url);
-  if (alreadyExists) return;
+  const existingStream = streams.find((stream) => stream.url === url);
+
+  if (existingStream) {
+    Object.assign(existingStream, {
+      type: streamInfo.type || existingStream.type,
+      extension: streamInfo.extension || existingStream.extension || null,
+      contentType: streamInfo.contentType || meta.contentType || existingStream.contentType || null,
+      source: existingStream.source === meta.source ? existingStream.source : `${existingStream.source || "unknown"}+${meta.source || "unknown"}`,
+      detector: meta.detector || existingStream.detector || null,
+      requestType: meta.requestType || existingStream.requestType || null,
+      method: meta.method || existingStream.method || null,
+      statusCode: meta.statusCode || existingStream.statusCode || null,
+      initiator: meta.initiator || existingStream.initiator || null,
+      updatedAt: Date.now()
+    });
+
+    return;
+  }
 
   const stream = {
     url,
     type: streamInfo.type,
     extension: streamInfo.extension || null,
+    contentType: streamInfo.contentType || meta.contentType || null,
+    source: meta.source || "unknown",
+    detector: meta.detector || null,
+    requestType: meta.requestType || null,
+    method: meta.method || null,
+    statusCode: meta.statusCode || null,
+    initiator: meta.initiator || null,
     foundAt: Date.now()
   };
 
@@ -174,7 +434,14 @@ chrome.webRequest.onBeforeRequest.addListener(
     const streamInfo = getStreamInfoFromUrl(details.url);
     if (!streamInfo) return;
 
-    rememberStream(details.tabId, details.url, streamInfo);
+    rememberStream(details.tabId, details.url, streamInfo, {
+      source: "url",
+      detector: "onBeforeRequest",
+      requestType: details.type || null,
+      method: details.method || null,
+      initiator: details.initiator || null
+    });
+
     rememberStreamForActiveCapture(details.tabId, details.url, streamInfo);
   },
   {
@@ -182,10 +449,59 @@ chrome.webRequest.onBeforeRequest.addListener(
   }
 );
 
+chrome.webRequest.onHeadersReceived.addListener(
+  (details) => {
+    if (!details || !details.url) return;
+
+    const fromHeaders = getStreamInfoFromHeaders(details.responseHeaders);
+    const fromUrl = getStreamInfoFromUrl(details.url);
+    const streamInfo = fromHeaders || fromUrl;
+
+    if (!streamInfo) {
+      const activeCapture = activeCapturesByTabId[details.tabId];
+
+      if (activeCapture) {
+        const contentType = getHeaderValue(details.responseHeaders, "content-type");
+
+        rememberDiagnostic(
+          details.tabId,
+          "capture-response-not-media",
+          "Во время capture был сетевой ответ, но Content-Type/URL не похожи на поддерживаемое медиа.",
+          {
+            url: details.url,
+            contentType,
+            requestType: details.type || null,
+            statusCode: details.statusCode || null
+          }
+        );
+      }
+
+      return;
+    }
+
+    rememberStream(details.tabId, details.url, streamInfo, {
+      source: "headers",
+      detector: "onHeadersReceived",
+      requestType: details.type || null,
+      method: details.method || null,
+      statusCode: details.statusCode || null,
+      initiator: details.initiator || null,
+      contentType: getHeaderValue(details.responseHeaders, "content-type")
+    });
+
+    rememberStreamForActiveCapture(details.tabId, details.url, streamInfo);
+  },
+  {
+    urls: ["<all_urls>"]
+  },
+  ["responseHeaders"]
+);
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   delete streamsByTabId[tabId];
   delete activeCapturesByTabId[tabId];
   delete capturedStreamsByTabId[tabId];
+  delete diagnosticsByTabId[tabId];
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -256,6 +572,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({
       ok: true,
       stream
+    });
+
+    return;
+  }
+    if (message.type === "GET_MEDIA_DOWNLOADER_STATE") {
+    const tabId = message.tabId;
+
+    sendResponse({
+      ok: true,
+      streams: streamsByTabId[tabId] || [],
+      diagnostics: diagnosticsByTabId[tabId] || []
+    });
+
+    return;
+  }
+
+  if (message.type === "CLEAR_MEDIA_DOWNLOADER_STATE") {
+    const tabId = message.tabId;
+
+    streamsByTabId[tabId] = [];
+    diagnosticsByTabId[tabId] = [];
+
+    sendResponse({
+      ok: true
+    });
+
+    return;
+  }
+
+    if (message.type === "CLEAR_MEDIA_DOWNLOADER_DIAGNOSTICS") {
+    const tabId = message.tabId;
+
+    diagnosticsByTabId[tabId] = [];
+
+    sendResponse({
+      ok: true
+    });
+
+    return;
+  }
+
+  if (message.type === "REPORT_MEDIA_DOWNLOADER_DIAGNOSTIC") {
+    const tabId = sender.tab?.id ?? message.tabId;
+
+    rememberDiagnostic(
+      tabId,
+      message.code || "content-diagnostic",
+      message.message || "Content script diagnostic",
+      message.data || {}
+    );
+
+    sendResponse({
+      ok: true
     });
 
     return;

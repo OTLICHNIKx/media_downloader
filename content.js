@@ -15,6 +15,7 @@ let mediaDownloaderScanTimer = null;
 let mediaDownloaderLastLocation = window.location.href;
 
 let mediaDownloaderUiEnabled = true;
+let mediaDownloaderLastDiagnosticReportAt = 0;
 const HLS_PANEL_ID = "media-downloader-hls-panel";
 const DASH_PANEL_ID = "media-downloader-dash-panel";
 const SUPPORTED_EXTENSIONS = [
@@ -29,6 +30,8 @@ const SUPPORTED_EXTENSIONS = [
   "m3u8",
   "mpd"
 ];
+
+
 
 const ICON_ADDED_ATTRIBUTE = "data-media-downloader-icon-added";
 
@@ -1085,22 +1088,76 @@ function enrichMediaItemWithTrackMetadata(mediaItem, trackElement) {
   };
 }
 
+function reportMediaDownloaderDiagnostic(code, message, data = {}) {
+  const now = Date.now();
+
+  if (now - mediaDownloaderLastDiagnosticReportAt < 3000) {
+    return;
+  }
+
+  mediaDownloaderLastDiagnosticReportAt = now;
+
+  chrome.runtime.sendMessage(
+    {
+      type: "REPORT_MEDIA_DOWNLOADER_DIAGNOSTIC",
+      code,
+      message,
+      data
+    },
+    () => {
+      if (chrome.runtime.lastError) {
+        // background может быть временно недоступен — игнорируем
+      }
+    }
+  );
+}
+
 function scanAndAddIcons() {
   injectStyles();
   cleanupBrokenDownloaderMarks();
+
+  const adapter = getCurrentSiteMediaAdapter();
   applyMediaMetadataAdapters();
+
+  const stats = {
+    host: window.location.hostname,
+    adapter: adapter ? adapter.name : null,
+    visibleLinks: 0,
+    inlineLinkMediaFound: 0,
+    visibleMediaElements: 0,
+    inlineMediaFound: 0,
+    latestHlsChecks: 0,
+    adapterCandidates: 0,
+    buttonsOnPage: 0
+  };
+
+  if (adapter) {
+    try {
+      stats.adapterCandidates = document.querySelectorAll(
+        adapter.cardSelectors.join(",")
+      ).length;
+    } catch {
+      stats.adapterCandidates = 0;
+    }
+  }
 
   document.querySelectorAll("a[href]").forEach((linkElement) => {
     if (!isElementReallyVisible(linkElement)) return;
 
+    stats.visibleLinks += 1;
+
     const mediaItem = buildMediaItem(linkElement.getAttribute("href"), "inline-link");
     if (!mediaItem) return;
+
+    stats.inlineLinkMediaFound += 1;
 
     addIconNearLink(linkElement, mediaItem);
   });
 
   document.querySelectorAll("audio, video").forEach((mediaElement) => {
     if (!isElementReallyVisible(mediaElement)) return;
+
+    stats.visibleMediaElements += 1;
 
     let mediaItem =
       buildMediaItem(mediaElement.currentSrc, "inline-media-current-src") ||
@@ -1114,6 +1171,7 @@ function scanAndAddIcons() {
     }
 
     if (mediaItem) {
+      stats.inlineMediaFound += 1;
       addIconOnMediaElement(mediaElement, mediaItem);
       return;
     }
@@ -1125,6 +1183,7 @@ function scanAndAddIcons() {
 
     if (now - lastHlsCheckAt < 2000) return;
 
+    stats.latestHlsChecks += 1;
     mediaElement.dataset.mediaDownloaderLastHlsCheckAt = String(now);
 
     getLatestHlsStream((stream) => {
@@ -1139,6 +1198,18 @@ function scanAndAddIcons() {
       addIconOnMediaElement(mediaElement, hlsItem);
     });
   });
+
+  stats.buttonsOnPage = document.querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}`).length;
+
+  const totalDirectFound = stats.inlineLinkMediaFound + stats.inlineMediaFound;
+
+  reportMediaDownloaderDiagnostic(
+    "scan-summary",
+    totalDirectFound > 0
+      ? `Content scan: найдено прямых media-элементов: ${totalDirectFound}.`
+      : "Content scan: прямые видимые media-ссылки не найдены. Открой popup — поток может быть найден через Network/MIME.",
+    stats
+  );
 }
 
 function scheduleMediaDownloaderScan(delay = 250) {

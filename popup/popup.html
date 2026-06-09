@@ -25,6 +25,27 @@
     </label>
 
     <p id="status" class="status"></p>
+        <section class="popup-section">
+      <div class="section-header">
+        <h2>Найденные потоки</h2>
+        <button id="refreshButton" class="small-button" type="button">Обновить</button>
+      </div>
+
+      <div id="streamsList" class="list-box empty">
+        Пока ничего не найдено. Запусти воспроизведение на странице и обнови popup.
+      </div>
+    </section>
+
+    <section class="popup-section">
+      <div class="section-header">
+        <h2>Диагностика</h2>
+        <button id="clearButton" class="small-button" type="button">Очистить</button>
+      </div>
+
+      <div id="diagnosticsList" class="list-box empty">
+        Диагностики пока нет.
+      </div>
+    </section>
   </main>
 
   <script src="popup.js"></script>

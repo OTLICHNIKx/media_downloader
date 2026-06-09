@@ -271,6 +271,28 @@
         Adapter MP3 ещё не запрашивался.
       </p>
     </section>
+        <section class="card">
+      <h2>11. Проверка popup: скрытые Network-потоки</h2>
+
+      <p>
+        Эти кнопки не добавляют видимые audio/video элементы. После клика открой popup расширения:
+        поток должен появиться в блоке «Найденные потоки».
+      </p>
+
+      <div class="button-row">
+        <button id="playPopupOnlyHlsButton" type="button">
+          Fetch popup-only HLS
+        </button>
+
+        <button id="playPopupOnlyMp3Button" type="button">
+          Fetch popup-only MP3
+        </button>
+      </div>
+
+      <p id="popupOnlyStatus" class="hint">
+        Потоки ещё не запрашивались.
+      </p>
+    </section>
   </main>
 <script>
   const playDynamicHlsButton = document.getElementById("playDynamicHlsButton");
@@ -355,6 +377,50 @@
           "MP3-запрос отправлен. Если adapter сработал, справа сверху на карточке появится кнопка.";
       } catch (error) {
         adapterMp3Status.textContent = `Ошибка adapter MP3-запроса: ${error.message}`;
+      }
+    });
+  }
+
+    const playPopupOnlyHlsButton = document.getElementById("playPopupOnlyHlsButton");
+  const playPopupOnlyMp3Button = document.getElementById("playPopupOnlyMp3Button");
+  const popupOnlyStatus = document.getElementById("popupOnlyStatus");
+
+  if (playPopupOnlyHlsButton && popupOnlyStatus) {
+    playPopupOnlyHlsButton.addEventListener("click", async () => {
+      popupOnlyStatus.textContent = "Запрашиваю popup-only HLS...";
+
+      try {
+        const response = await fetch(`test_hls/playlist.m3u8?popupOnly=1&format=hls&t=${Date.now()}`, {
+          cache: "no-store"
+        });
+
+        await response.text();
+
+        popupOnlyStatus.textContent =
+          "HLS запрошен. Открой popup расширения и проверь блок «Найденные потоки».";
+      } catch (error) {
+        popupOnlyStatus.textContent = `Ошибка HLS-запроса: ${error.message}`;
+      }
+    });
+  }
+
+  if (playPopupOnlyMp3Button && popupOnlyStatus) {
+    playPopupOnlyMp3Button.addEventListener("click", async () => {
+      popupOnlyStatus.textContent = "Запрашиваю popup-only MP3...";
+
+      try {
+        await fetch(
+          `https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3?popupOnly=1&mime=audio/mpeg&t=${Date.now()}`,
+          {
+            mode: "no-cors",
+            cache: "no-store"
+          }
+        );
+
+        popupOnlyStatus.textContent =
+          "MP3 запрошен. Открой popup расширения и проверь блок «Найденные потоки».";
+      } catch (error) {
+        popupOnlyStatus.textContent = `Ошибка MP3-запроса: ${error.message}`;
       }
     });
   }

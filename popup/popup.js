@@ -106,6 +106,54 @@ function getStreamFilename(stream) {
   return getFilenameFromUrl(stream.url, extension);
 }
 
+function formatBytes(bytes) {
+  const number = Number(bytes);
+
+  if (!Number.isFinite(number) || number <= 0) {
+    return null;
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  let value = number;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const formattedValue = value >= 10 ? value.toFixed(1) : value.toFixed(2);
+
+  return `${formattedValue} ${units[unitIndex]}`;
+}
+
+function getHostFromStreamUrl(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+function getStreamMetaParts(stream) {
+  const parts = [];
+
+  const host = getHostFromStreamUrl(stream.url);
+  const size = formatBytes(stream.contentLength);
+
+  if (stream.contentType) parts.push(stream.contentType);
+  if (host) parts.push(host);
+  if (stream.qualityLabel) parts.push(stream.qualityLabel);
+  if (size) parts.push(size);
+  if (stream.statusCode) parts.push(`HTTP ${stream.statusCode}`);
+  if (stream.acceptRanges) parts.push(`ranges: ${stream.acceptRanges}`);
+  if (stream.source) parts.push(`source: ${stream.source}`);
+  if (stream.requestType) parts.push(stream.requestType);
+  if (stream.foundAt) parts.push(formatTime(stream.foundAt));
+
+  return parts;
+}
+
 function formatTime(timestamp) {
   if (!timestamp) return "";
 
@@ -181,13 +229,7 @@ function createStreamElement(stream) {
   const meta = document.createElement("div");
   meta.className = "stream-meta";
 
-  const parts = [];
-
-  if (stream.contentType) parts.push(stream.contentType);
-  if (stream.source) parts.push(`source: ${stream.source}`);
-  if (stream.requestType) parts.push(stream.requestType);
-  if (stream.foundAt) parts.push(formatTime(stream.foundAt));
-
+  const parts = getStreamMetaParts(stream);
   meta.textContent = parts.join(" · ");
 
   const url = document.createElement("div");

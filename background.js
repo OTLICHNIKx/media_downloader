@@ -164,6 +164,91 @@ function getStreamInfoFromContentType(contentType) {
   return null;
 }
 
+function getNumberHeaderValue(responseHeaders, headerName) {
+  const value = getHeaderValue(responseHeaders, headerName);
+  const number = Number(value);
+
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function mergePlusSeparatedValues(currentValue, nextValue) {
+  const values = new Set();
+
+  String(currentValue || "")
+    .split("+")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .forEach((value) => values.add(value));
+
+  String(nextValue || "")
+    .split("+")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .forEach((value) => values.add(value));
+
+  return Array.from(values).join("+");
+}
+
+function getQualityLabelFromUrl(url) {
+  if (!url) return null;
+
+  try {
+    const parsedUrl = new URL(url);
+    const decodedUrl = decodeURIComponent(parsedUrl.href).toLowerCase();
+
+    const resolutionMatch = decodedUrl.match(/(?:^|[^\d])([1-9]\d{2,3})x([1-9]\d{2,3})(?:[^\d]|$)/);
+    if (resolutionMatch) {
+      return `${resolutionMatch[1]}×${resolutionMatch[2]}`;
+    }
+
+    const qualityParam =
+      parsedUrl.searchParams.get("quality") ||
+      parsedUrl.searchParams.get("res") ||
+      parsedUrl.searchParams.get("resolution") ||
+      parsedUrl.searchParams.get("height") ||
+      parsedUrl.searchParams.get("label");
+
+    if (qualityParam) {
+      const cleanQuality = String(qualityParam).trim();
+
+      if (/^\d{3,4}$/.test(cleanQuality)) {
+        return `${cleanQuality}p`;
+      }
+
+      return cleanQuality;
+    }
+
+    const qualityMatch = decodedUrl.match(/(?:^|[^\d])(\d{3,4})p(?:[^\d]|$)/);
+    if (qualityMatch) {
+      return `${qualityMatch[1]}p`;
+    }
+
+    const bitrateParam =
+      parsedUrl.searchParams.get("bitrate") ||
+      parsedUrl.searchParams.get("br") ||
+      parsedUrl.searchParams.get("abr");
+
+    if (bitrateParam) {
+      const cleanBitrate = String(bitrateParam).trim();
+
+      if (/^\d+$/.test(cleanBitrate)) {
+        return `${cleanBitrate} kbps`;
+      }
+
+      return cleanBitrate;
+    }
+
+    const bitrateMatch = decodedUrl.match(/(?:^|[^\d])(\d{2,4})k(?:[^\d]|$)/);
+    if (bitrateMatch) {
+      return `${bitrateMatch[1]} kbps`;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function getHeaderValue(responseHeaders, headerName) {
   if (!Array.isArray(responseHeaders)) return "";
 
@@ -376,21 +461,39 @@ function rememberStream(tabId, url, streamInfo, meta = {}) {
 
   const streams = streamsByTabId[tabId];
 
+  const qualityLabel =
+    meta.qualityLabel ||
+    streamInfo.qualityLabel ||
+    getQualityLabelFromUrl(url);
+
   const existingStream = streams.find((stream) => stream.url === url);
 
   if (existingStream) {
-    Object.assign(existingStream, {
-      type: streamInfo.type || existingStream.type,
-      extension: streamInfo.extension || existingStream.extension || null,
-      contentType: streamInfo.contentType || meta.contentType || existingStream.contentType || null,
-      source: existingStream.source === meta.source ? existingStream.source : `${existingStream.source || "unknown"}+${meta.source || "unknown"}`,
-      detector: meta.detector || existingStream.detector || null,
-      requestType: meta.requestType || existingStream.requestType || null,
-      method: meta.method || existingStream.method || null,
-      statusCode: meta.statusCode || existingStream.statusCode || null,
-      initiator: meta.initiator || existingStream.initiator || null,
-      updatedAt: Date.now()
-    });
+    existingStream.type = streamInfo.type || existingStream.type;
+    existingStream.extension = streamInfo.extension || existingStream.extension || null;
+    existingStream.contentType = streamInfo.contentType || meta.contentType || existingStream.contentType || null;
+
+    existingStream.source = mergePlusSeparatedValues(
+      existingStream.source,
+      meta.source || "unknown"
+    );
+
+    existingStream.detector = mergePlusSeparatedValues(
+      existingStream.detector,
+      meta.detector || ""
+    );
+
+    existingStream.requestType = meta.requestType || existingStream.requestType || null;
+    existingStream.method = meta.method || existingStream.method || null;
+    existingStream.statusCode = meta.statusCode || existingStream.statusCode || null;
+    existingStream.initiator = meta.initiator || existingStream.initiator || null;
+
+    existingStream.contentLength = meta.contentLength || existingStream.contentLength || null;
+    existingStream.acceptRanges = meta.acceptRanges || existingStream.acceptRanges || null;
+    existingStream.contentRange = meta.contentRange || existingStream.contentRange || null;
+    existingStream.qualityLabel = qualityLabel || existingStream.qualityLabel || null;
+
+    existingStream.updatedAt = Date.now();
 
     return;
   }
@@ -406,6 +509,10 @@ function rememberStream(tabId, url, streamInfo, meta = {}) {
     method: meta.method || null,
     statusCode: meta.statusCode || null,
     initiator: meta.initiator || null,
+    contentLength: meta.contentLength || null,
+    acceptRanges: meta.acceptRanges || null,
+    contentRange: meta.contentRange || null,
+    qualityLabel: qualityLabel || null,
     foundAt: Date.now()
   };
 
@@ -522,7 +629,10 @@ chrome.webRequest.onHeadersReceived.addListener(
       method: details.method || null,
       statusCode: details.statusCode || null,
       initiator: details.initiator || null,
-      contentType: getHeaderValue(details.responseHeaders, "content-type")
+      contentType: getHeaderValue(details.responseHeaders, "content-type"),
+      contentLength: getNumberHeaderValue(details.responseHeaders, "content-length"),
+      acceptRanges: getHeaderValue(details.responseHeaders, "accept-ranges"),
+      contentRange: getHeaderValue(details.responseHeaders, "content-range")
     });
 
     rememberStreamForActiveCapture(details.tabId, details.url, streamInfo);

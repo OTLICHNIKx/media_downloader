@@ -392,6 +392,109 @@ function getStreamInfoFromUrl(url) {
   }
 }
 
+function isManifestLikeStream(streamInfo, url) {
+  if (!streamInfo) return false;
+
+  if (streamInfo.type === "hls" || streamInfo.type === "dash") {
+    return true;
+  }
+
+  const normalizedUrl = String(url || "").toLowerCase();
+  return normalizedUrl.includes(".m3u8") || normalizedUrl.includes(".mpd");
+}
+
+function isFragmentLikeUrl(url) {
+  if (!url) return false;
+
+  try {
+    const parsedUrl = new URL(url);
+    const decodedHref = decodeURIComponent(parsedUrl.href).toLowerCase();
+    const pathname = parsedUrl.pathname.toLowerCase();
+    const search = parsedUrl.search.toLowerCase();
+
+    if (
+      pathname.endsWith(".m4s") ||
+      pathname.endsWith(".cmfa") ||
+      pathname.endsWith(".cmfv") ||
+      pathname.endsWith(".ts")
+    ) {
+      return true;
+    }
+
+    if (
+      /(?:^|[\/_\-.])(seg(?:ment)?|frag(?:ment)?|chunk|part|init)(?:[\/_\-.]|\d|$)/.test(pathname) ||
+      /(?:^|[?&])(segment|frag(?:ment)?|chunk|part|init|seq(?:uence)?|range)=/i.test(search) ||
+      decodedHref.includes("/media/") ||
+      decodedHref.includes("/segment/") ||
+      decodedHref.includes("/fragments/")
+    ) {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function getCaptureCandidateScore(url, streamInfo, meta = {}) {
+  let score = 0;
+
+  if (isManifestLikeStream(streamInfo, url)) {
+    score += 100;
+  }
+
+  if (streamInfo?.type === "audio" || streamInfo?.type === "video") {
+    score += 20;
+  }
+
+  if (meta.contentLength && Number(meta.contentLength) > 256 * 1024) {
+    score += 20;
+  }
+
+  if (meta.acceptRanges) {
+    score += 10;
+  }
+
+  if (meta.requestType === "media") {
+    score += 5;
+  }
+
+  if (isFragmentLikeUrl(url)) {
+    score -= 80;
+  }
+
+  return score;
+}
+
+function shouldReplaceCapturedStream(existingStream, nextStream) {
+  if (!existingStream) return true;
+  if (!nextStream) return false;
+
+  const currentScore = Number(existingStream.captureScore || 0);
+  const nextScore = Number(nextStream.captureScore || 0);
+
+  if (nextScore !== currentScore) {
+    return nextScore > currentScore;
+  }
+
+  const existingIsFragment = Boolean(existingStream.isFragmentLike);
+  const nextIsFragment = Boolean(nextStream.isFragmentLike);
+
+  if (existingIsFragment !== nextIsFragment) {
+    return !nextIsFragment;
+  }
+
+  const existingIsManifest = Boolean(existingStream.isManifestLike);
+  const nextIsManifest = Boolean(nextStream.isManifestLike);
+
+  if (existingIsManifest !== nextIsManifest) {
+    return nextIsManifest;
+  }
+
+  return Number(nextStream.foundAt || 0) >= Number(existingStream.foundAt || 0);
+}
+
 function getDiagnosticSignature(code, message, data = {}) {
   const stableData = {
     host: data.host || null,
@@ -526,7 +629,7 @@ function rememberStream(tabId, url, streamInfo, meta = {}) {
   console.log("[Media Downloader] Stream found:", stream);
 }
 
-function rememberStreamForActiveCapture(tabId, url, streamInfo) {
+function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}) {
   if (tabId < 0 || !url || !streamInfo || !streamInfo.type) return;
 
   const activeCapture = activeCapturesByTabId[tabId];
@@ -557,14 +660,74 @@ function rememberStreamForActiveCapture(tabId, url, streamInfo) {
     capturedStreamsByTabId[tabId] = {};
   }
 
+  const isManifestLike = isManifestLikeStream(streamInfo, url);
+  const isFragmentLike = isFragmentLikeUrl(url);
+  const captureScore = getCaptureCandidateScore(url, streamInfo, meta);
+
   const capturedStream = {
     url,
     type: streamInfo.type,
     extension: streamInfo.extension || null,
+    contentType: streamInfo.contentType || meta.contentType || null,
     captureId: activeCapture.captureId,
     trackTitle: activeCapture.trackTitle || "media",
-    foundAt: now
+    foundAt: now,
+    isManifestLike,
+    isFragmentLike,
+    captureScore
   };
+
+  const existingCapturedStream = capturedStreamsByTabId[tabId][activeCapture.captureId] || null;
+
+  if (!shouldReplaceCapturedStream(existingCapturedStream, capturedStream)) {
+    if (isFragmentLike && !existingCapturedStream?.isFragmentLike) {
+      rememberDiagnostic(
+        tabId,
+        "captured-audio-fragment-not-full-file",
+        "Во время capture найден audio/video fragment, но он проигнорирован в пользу более подходящего потока.",
+        {
+          captureId: activeCapture.captureId,
+          trackTitle: activeCapture.trackTitle || "media",
+          url,
+          contentType: capturedStream.contentType,
+          requestType: meta.requestType || null,
+          statusCode: meta.statusCode || null
+        }
+      );
+    }
+
+    return;
+  }
+
+  if (existingCapturedStream?.isFragmentLike && isManifestLike) {
+    rememberDiagnostic(
+      tabId,
+      "capture-preferred-hls-manifest",
+      "Во время capture manifest был выбран вместо audio/video fragment.",
+      {
+        captureId: activeCapture.captureId,
+        trackTitle: activeCapture.trackTitle || "media",
+        url,
+        contentType: capturedStream.contentType,
+        requestType: meta.requestType || null,
+        statusCode: meta.statusCode || null
+      }
+    );
+  } else if (isFragmentLike && !existingCapturedStream) {
+    rememberDiagnostic(
+      tabId,
+      "capture-found-fragment-without-manifest",
+      "Во время capture найден только fragment-поток. Он может не быть полноценным скачиваемым файлом.",
+      {
+        captureId: activeCapture.captureId,
+        trackTitle: activeCapture.trackTitle || "media",
+        url,
+        contentType: capturedStream.contentType,
+        requestType: meta.requestType || null,
+        statusCode: meta.statusCode || null
+      }
+    );
+  }
 
   capturedStreamsByTabId[tabId][activeCapture.captureId] = capturedStream;
 
@@ -600,7 +763,11 @@ chrome.webRequest.onBeforeRequest.addListener(
       initiator: details.initiator || null
     });
 
-    rememberStreamForActiveCapture(details.tabId, details.url, streamInfo);
+    rememberStreamForActiveCapture(details.tabId, details.url, streamInfo, {
+      requestType: details.type || null,
+      method: details.method || null,
+      initiator: details.initiator || null
+    });
   },
   {
     urls: ["<all_urls>"]
@@ -650,7 +817,16 @@ chrome.webRequest.onHeadersReceived.addListener(
       contentRange: getHeaderValue(details.responseHeaders, "content-range")
     });
 
-    rememberStreamForActiveCapture(details.tabId, details.url, streamInfo);
+    rememberStreamForActiveCapture(details.tabId, details.url, streamInfo, {
+      requestType: details.type || null,
+      method: details.method || null,
+      statusCode: details.statusCode || null,
+      initiator: details.initiator || null,
+      contentType: getHeaderValue(details.responseHeaders, "content-type"),
+      contentLength: getNumberHeaderValue(details.responseHeaders, "content-length"),
+      acceptRanges: getHeaderValue(details.responseHeaders, "accept-ranges"),
+      contentRange: getHeaderValue(details.responseHeaders, "content-range")
+    });
   },
   {
     urls: ["<all_urls>"]

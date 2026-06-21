@@ -748,6 +748,10 @@ function getTrackTitle(trackElement) {
 function buildStreamMediaItem(stream, source = "captured-stream") {
   if (!stream || !stream.url) return null;
 
+  if (stream.isFragmentLike && !stream.isManifestLike) {
+    return null;
+  }
+
   const normalizedUrl = normalizeUrl(stream.url);
   if (!normalizedUrl) return null;
 
@@ -1655,9 +1659,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const mediaItem = buildStreamMediaItem(stream, "captured-stream");
 
     if (!mediaItem) {
+      reportMediaDownloaderDiagnostic(
+        "captured-audio-fragment-not-full-file",
+        "Пойманный поток похож на fragment/segment и не будет показан как прямое скачивание.",
+        {
+          adapter: trackElement.getAttribute(TRACK_ADAPTER_ATTRIBUTE) || null,
+          trackTitle: getTrackTitle(trackElement),
+          url: stream?.url || null,
+          contentType: stream?.contentType || null,
+          isFragmentLike: Boolean(stream?.isFragmentLike),
+          isManifestLike: Boolean(stream?.isManifestLike)
+        },
+        {
+          throttleMs: 1000
+        }
+      );
+
       sendResponse({
         ok: false,
-        error: "Cannot build media item from captured stream"
+        error: "Captured stream looks like fragment, not downloadable file"
       });
 
       return;

@@ -9,6 +9,7 @@ const downloadButtonElement = document.getElementById("downloadButton");
 const cancelDownloadButtonElement = document.getElementById("cancelDownloadButton");
 
 const params = new URLSearchParams(window.location.search);
+const initialFallbackPlaylistId = params.get("fallbackPlaylistId") || "";
 const initialPlaylistUrl = params.get("url");
 const initialFilename = params.get("filename") || "media.m3u8";
 const isEmbedMode = params.get("embed") === "1";
@@ -221,6 +222,229 @@ async function fetchText(url, options = {}) {
   return response.text();
 }
 
+function isAuthLikePlaylistError(error) {
+  const message = String(error?.message || "");
+
+  return (
+    message.includes("HTTP 401") ||
+    message.includes("HTTP 403")
+  );
+}
+
+function getSoundCloudFallbackPlaylist(fallbackPlaylistId) {
+  return new Promise((resolve, reject) => {
+    if (!fallbackPlaylistId) {
+      reject(new Error("SoundCloud fallback playlist id не передан."));
+      return;
+    }
+
+    chrome.runtime.sendMessage(
+      {
+        type: "GET_SOUNDCLOUD_FALLBACK_PLAYLIST",
+        fallbackPlaylistId
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+
+        if (!response || !response.ok) {
+          reject(new Error(response?.error || "SoundCloud fallback playlist недоступен."));
+          return;
+        }
+
+        resolve(response);
+      }
+    );
+  });
+}
+
+async function fetchHlsPlaylistResourceWithFallback(url, options = {}) {
+  try {
+    return await fetchHlsPlaylistResource(url, options);
+  } catch (error) {
+    if (!initialFallbackPlaylistId || !isAuthLikePlaylistError(error)) {
+      throw error;
+    }
+
+    const fallback = await getSoundCloudFallbackPlaylist(initialFallbackPlaylistId);
+
+    return {
+      playlistUrl: fallback.playlistUrl,
+      playlistText: fallback.playlistText,
+      resolvedFrom: url,
+      isFallback: true,
+      fallback
+    };
+  }
+}
+
+function buildFallbackDetails(resource) {
+  if (!resource?.isFallback || !resource.fallback) {
+    return "";
+  }
+
+  const lines = [
+    "SoundCloud fallback: включён",
+    `Источник: ${resource.fallback.source}`,
+    `Качество: ${resource.fallback.qualityLabel || "unknown"}`,
+    `Поймано сегментов: ${resource.fallback.segmentCount}`,
+    ""
+  ];
+
+  if (resource.fallback.warning) {
+    lines.push(resource.fallback.warning);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+function isLikelyHlsPlaylistText(text) {
+  const cleanText = String(text || "").trim();
+
+  return (
+    cleanText.startsWith("#EXTM3U") ||
+    cleanText.includes("#EXT-X-STREAM-INF") ||
+    cleanText.includes("#EXTINF")
+  );
+}
+
+function collectJsonStringCandidates(value, path = "", result = []) {
+  if (typeof value === "string") {
+    result.push({
+      value,
+      path
+    });
+
+    return result;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      collectJsonStringCandidates(item, `${path}[${index}]`, result);
+    });
+
+    return result;
+  }
+
+  if (value && typeof value === "object") {
+    Object.entries(value).forEach(([key, item]) => {
+      collectJsonStringCandidates(item, path ? `${path}.${key}` : key, result);
+    });
+  }
+
+  return result;
+}
+
+function scoreHlsPlaylistCandidate(candidate) {
+  const value = String(candidate.value || "").toLowerCase();
+  const path = String(candidate.path || "").toLowerCase();
+
+  let score = 0;
+
+  if (path === "url") score += 50;
+  if (path.includes("hls")) score += 40;
+  if (path.includes("aac")) score += 20;
+  if (path.includes("playlist")) score += 20;
+  if (path.includes("stream")) score += 10;
+
+  if (value.includes(".m3u8")) score += 100;
+  if (value.includes("/playlist")) score += 40;
+  if (value.includes("/hls")) score += 30;
+  if (value.startsWith("http://") || value.startsWith("https://")) score += 20;
+
+  return score;
+}
+
+function extractHlsPlaylistUrlFromJsonText(text, baseUrl) {
+  let data;
+
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
+  const candidates = collectJsonStringCandidates(data)
+    .filter((candidate) => {
+      const value = String(candidate.value || "").toLowerCase();
+
+      return (
+        value.startsWith("http://") ||
+        value.startsWith("https://") ||
+        value.includes(".m3u8") ||
+        value.includes("/playlist") ||
+        value.includes("/hls")
+      );
+    })
+    .map((candidate) => {
+      return {
+        ...candidate,
+        score: scoreHlsPlaylistCandidate(candidate)
+      };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  try {
+    return resolveUrl(baseUrl, candidates[0].value);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchHlsPlaylistResource(url, options = {}) {
+  const firstText = await fetchText(url, options);
+
+  if (isLikelyHlsPlaylistText(firstText)) {
+    return {
+      playlistUrl: url,
+      playlistText: firstText,
+      resolvedFrom: null
+    };
+  }
+
+  const resolvedPlaylistUrl = extractHlsPlaylistUrlFromJsonText(firstText, url);
+
+  if (!resolvedPlaylistUrl) {
+    throw new Error(
+      "URL не вернул HLS playlist и не содержит JSON-поля с HLS playlist URL."
+    );
+  }
+
+  const playlistText = await fetchText(resolvedPlaylistUrl, options);
+
+  if (!isLikelyHlsPlaylistText(playlistText)) {
+    throw new Error(
+      "Развернутый URL получен, но его ответ не похож на HLS playlist."
+    );
+  }
+
+  return {
+    playlistUrl: resolvedPlaylistUrl,
+    playlistText,
+    resolvedFrom: url
+  };
+}
+
+function buildPlaylistSourceDetails(resource) {
+  if (!resource || !resource.resolvedFrom) {
+    return "";
+  }
+
+  return [
+    `API endpoint: ${resource.resolvedFrom}`,
+    `Resolved playlist: ${resource.playlistUrl}`,
+    ""
+  ].join("\n");
+}
+
 async function fetchArrayBuffer(url, options = {}) {
   const targetLabel = options.label || "сегмент";
   let response;
@@ -377,12 +601,71 @@ function isAudioOnlyVariant(variant) {
   return hasAudioCodec && !hasVideoCodec;
 }
 
-function getOutputInfo(segmentUrls, hasInitMap, variant = null) {
+function isLikelySoundCloudAudioHls(segmentUrls, playlistText = "", playlistUrl = "") {
+  const sample = [
+    playlistUrl,
+    playlistText,
+    ...segmentUrls.slice(0, 5)
+  ]
+    .join("\n")
+    .toLowerCase();
+
+  return (
+    sample.includes("soundcloud") &&
+    (
+      sample.includes("/aac_") ||
+      sample.includes("aac_160k") ||
+      sample.includes("mp4a") ||
+      sample.includes("audio/mp4")
+    )
+  );
+}
+
+function isLikelyAudioOnlyHlsOutput(segmentUrls, hasInitMap, variant = null, playlistText = "", playlistUrl = "") {
+  if (isAudioOnlyVariant(variant)) {
+    return true;
+  }
+
+  if (isLikelySoundCloudAudioHls(segmentUrls, playlistText, playlistUrl)) {
+    return true;
+  }
+
+  const sample = [
+    playlistUrl,
+    playlistText,
+    ...segmentUrls.slice(0, 5)
+  ]
+    .join("\n")
+    .toLowerCase();
+
+  if (
+    hasInitMap &&
+    (
+      sample.includes("codecs=\"mp4a") ||
+      sample.includes("codecs=mp4a") ||
+      sample.includes("audio/mp4") ||
+      sample.includes("/aac_")
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function getOutputInfo(segmentUrls, hasInitMap, variant = null, playlistText = "", playlistUrl = "") {
   const firstSegmentExtension = getPathnameExtension(segmentUrls[0]);
-  const audioOnlyVariant = isAudioOnlyVariant(variant);
+
+  const audioOnlyOutput = isLikelyAudioOnlyHlsOutput(
+    segmentUrls,
+    hasInitMap,
+    variant,
+    playlistText,
+    playlistUrl
+  );
 
   if (hasInitMap) {
-    return audioOnlyVariant
+    return audioOnlyOutput
       ? {
           extension: ".m4a",
           mimeType: "audio/mp4"
@@ -408,7 +691,7 @@ function getOutputInfo(segmentUrls, hasInitMap, variant = null) {
   }
 
   if (firstSegmentExtension === ".mp4") {
-    return audioOnlyVariant
+    return audioOnlyOutput
       ? {
           extension: ".m4a",
           mimeType: "audio/mp4"
@@ -419,10 +702,15 @@ function getOutputInfo(segmentUrls, hasInitMap, variant = null) {
         };
   }
 
-  return {
-    extension: ".ts",
-    mimeType: "video/mp2t"
-  };
+  return audioOnlyOutput
+    ? {
+        extension: ".m4a",
+        mimeType: "audio/mp4"
+      }
+    : {
+        extension: ".ts",
+        mimeType: "video/mp2t"
+      };
 }
 
 async function downloadBlob(blob, filename) {
@@ -501,7 +789,13 @@ function prepareMediaPlaylist(playlistUrl, playlistText, variant = null, variant
     throw new Error("В playlist не найдено сегментов.");
   }
 
-  const outputInfo = getOutputInfo(segmentUrls, Boolean(initMapUrl), variant);
+  const outputInfo = getOutputInfo(
+    segmentUrls,
+    Boolean(initMapUrl),
+    variant,
+    playlistText,
+    playlistUrl
+  );
   const outputFilename = replaceFileExtension(initialFilename, outputInfo.extension);
 
   return {
@@ -578,16 +872,21 @@ async function prepareSelectedVariant() {
   setProgress(8);
 
   try {
-    const playlistText = await fetchText(selectedVariant.url);
+    const playlistResource = await fetchHlsPlaylistResource(selectedVariant.url);
 
     preparedDownload = prepareMediaPlaylist(
-      selectedVariant.url,
-      playlistText,
+      playlistResource.playlistUrl,
+      playlistResource.playlistText,
       selectedVariant,
       selectedIndex
     );
 
-    setDetails(buildPreparedDetails(preparedDownload));
+    setDetails(
+      buildPlaylistSourceDetails(playlistResource) +
+      buildFallbackDetails(playlistResource) +
+      buildPreparedDetails(preparedDownload)
+    );
+
     setStatus("Готово к скачиванию. Выбери качество и нажми «Скачать выбранное».");
     setProgress(0);
     setDownloadUiState(false);
@@ -695,8 +994,16 @@ async function initializeHlsDownloader() {
     setStatus("Загружаю HLS playlist...");
     setProgress(4);
 
-    const playlistText = await fetchText(initialPlaylistUrl);
-    const variants = parseMasterPlaylist(playlistText, initialPlaylistUrl);
+    const playlistResource = await fetchHlsPlaylistResourceWithFallback(initialPlaylistUrl);
+
+    sourceUrlElement.textContent = playlistResource.resolvedFrom
+      ? `${playlistResource.resolvedFrom}\n→ ${playlistResource.playlistUrl}`
+      : playlistResource.playlistUrl;
+
+    const variants = parseMasterPlaylist(
+      playlistResource.playlistText,
+      playlistResource.playlistUrl
+    );
 
     setControlsVisible(true);
 
@@ -710,9 +1017,17 @@ async function initializeHlsDownloader() {
     loadedMasterVariants = [];
     renderSinglePlaylistOption();
 
-    preparedDownload = prepareMediaPlaylist(initialPlaylistUrl, playlistText);
+    preparedDownload = prepareMediaPlaylist(
+      playlistResource.playlistUrl,
+      playlistResource.playlistText
+    );
 
-    setDetails(buildPreparedDetails(preparedDownload));
+    setDetails(
+      buildPlaylistSourceDetails(playlistResource) +
+      buildFallbackDetails(playlistResource) +
+      buildPreparedDetails(preparedDownload)
+    );
+
     setStatus("Готово к скачиванию. Нажми «Скачать выбранное».");
     setProgress(0);
     setDownloadUiState(false);

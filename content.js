@@ -13,7 +13,7 @@ const MEDIA_DOWNLOADER_URL_ATTRIBUTE = "data-media-downloader-url";
 
 let mediaDownloaderScanTimer = null;
 let mediaDownloaderLastLocation = window.location.href;
-
+const MEDIA_DOWNLOADER_FALLBACK_ATTRIBUTE = "data-media-downloader-fallback-id";
 let mediaDownloaderUiEnabled = true;
 let mediaDownloaderLastDiagnosticReportAt = 0;
 const HLS_PANEL_ID = "media-downloader-hls-panel";
@@ -786,7 +786,10 @@ function buildStreamMediaItem(stream, source = "captured-stream") {
     streamType,
     quality,
     filename: getFileName(normalizedUrl) || `media.${extension}`,
-    source
+    source,
+    soundCloudFallbackPlaylistId: stream.soundCloudFallbackPlaylistId || null,
+    soundCloudFallbackSegmentCount: stream.soundCloudFallbackSegmentCount || null,
+    soundCloudFallbackQuality: stream.soundCloudFallbackQuality || null
   };
 }
 
@@ -838,9 +841,12 @@ function addIconOnTrackElement(trackElement, mediaItem) {
     `:scope > .${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
   );
 
+  const nextFallbackId = mediaItem.soundCloudFallbackPlaylistId || "";
+
   if (
     existingIcon &&
-    existingIcon.getAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE) === mediaItem.url
+    existingIcon.getAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE) === mediaItem.url &&
+    (existingIcon.getAttribute(MEDIA_DOWNLOADER_FALLBACK_ATTRIBUTE) || "") === nextFallbackId
   ) {
     return;
   }
@@ -857,6 +863,9 @@ function addIconOnTrackElement(trackElement, mediaItem) {
   const icon = createDownloadIcon(mediaItem);
   icon.classList.add("media-downloader-track-button");
   icon.setAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE, mediaItem.url);
+  if (mediaItem.soundCloudFallbackPlaylistId) {
+    icon.setAttribute(MEDIA_DOWNLOADER_FALLBACK_ATTRIBUTE, mediaItem.soundCloudFallbackPlaylistId);
+  }
   icon.setAttribute(TRACK_STREAM_TYPE_ATTRIBUTE, mediaItem.streamType || mediaItem.extension);
 
   trackElement.appendChild(icon);
@@ -1512,10 +1521,15 @@ function openHlsDownloaderPanel(mediaItem) {
   closeHlsDownloaderPanel();
   closeDashDownloaderPanel();
 
+  const fallbackParam = mediaItem.soundCloudFallbackPlaylistId
+    ? `&fallbackPlaylistId=${encodeURIComponent(mediaItem.soundCloudFallbackPlaylistId)}`
+    : "";
+
   const panelUrl =
     chrome.runtime.getURL("hls/hls.html") +
     `?url=${encodeURIComponent(mediaItem.url)}` +
     `&filename=${encodeURIComponent(mediaItem.filename || "media.m3u8")}` +
+    fallbackParam +
     `&embed=1`;
 
   const iframe = document.createElement("iframe");

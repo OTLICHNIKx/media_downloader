@@ -1,0 +1,9 @@
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:10
+#EXT-X-MAP:URI="../test_dash/audio-128-init.mp4"
+#EXTINF:10.000,
+../test_dash/audio-128-1.m4s
+#EXTINF:10.000,
+../test_dash/audio-128-2.m4s
+#EXT-X-ENDLIST

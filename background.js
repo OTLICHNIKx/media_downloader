@@ -4,6 +4,9 @@ const capturedStreamsByTabId = {};
 const diagnosticsByTabId = {};
 const diagnosticSignaturesByTabId = {};
 const scanSummariesByTabId = {};
+const soundCloudFragmentGroupsByTabId = {};
+const soundCloudFallbackPlaylistsById = {};
+
 const MAX_STREAMS_PER_TAB = 50;
 const MAX_DIAGNOSTICS_PER_TAB = 30;
 
@@ -354,12 +357,51 @@ function getStreamInfoFromQueryParams(parsedUrl) {
   return null;
 }
 
+function isSoundCloudPlaybackHlsEndpoint(url) {
+  if (!url) return false;
+
+  try {
+    const parsedUrl = new URL(url);
+    const host = parsedUrl.hostname.toLowerCase();
+    const pathname = decodeURIComponent(parsedUrl.pathname).toLowerCase();
+
+    if (host !== "api-v2.soundcloud.com" && host !== "api.soundcloud.com") {
+      return false;
+    }
+
+    return (
+      pathname.includes("/media/soundcloud:tracks:") &&
+      pathname.includes("/stream/hls")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function getSoundCloudHlsStreamInfoFromUrl(url) {
+  if (!isSoundCloudPlaybackHlsEndpoint(url)) {
+    return null;
+  }
+
+  return {
+    type: "hls",
+    extension: "m3u8",
+    source: "soundcloud-api",
+    qualityLabel: "SoundCloud HLS"
+  };
+}
+
 function getStreamInfoFromUrl(url) {
   if (!url) return null;
 
   try {
     const parsedUrl = new URL(url);
     const lower = parsedUrl.href.toLowerCase();
+
+    const soundCloudHlsInfo = getSoundCloudHlsStreamInfoFromUrl(url);
+    if (soundCloudHlsInfo) {
+      return soundCloudHlsInfo;
+    }
 
     if (
       lower.includes(".m3u8") ||
@@ -408,6 +450,10 @@ function getSoundCloudCaptureHint(url) {
     return null;
   }
 
+  if (isSoundCloudPlaybackHlsEndpoint(url)) {
+    return "api";
+  }
+
   const lower = String(url).toLowerCase();
 
   if (lower.includes(".m3u8") || lower.includes("/playlist") || lower.includes("/manifest")) {
@@ -423,6 +469,250 @@ function getSoundCloudCaptureHint(url) {
   }
 
   return null;
+}
+
+function hashString(value) {
+  let hash = 0;
+  const text = String(value || "");
+
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
+  }
+
+  return Math.abs(hash).toString(36);
+}
+
+function getSoundCloudFragmentInfo(url) {
+  if (!url) return null;
+
+  try {
+    const parsedUrl = new URL(url);
+    const host = parsedUrl.hostname.toLowerCase();
+
+    if (!host.includes("soundcloud.cloud")) {
+      return null;
+    }
+
+    const parts = decodeURIComponent(parsedUrl.pathname)
+      .split("/")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    const fileName = parts[parts.length - 1];
+
+    if (!fileName) return null;
+
+    const isInit = fileName.toLowerCase() === "init.mp4";
+    const segmentMatch = fileName.toLowerCase().match(/^data(\d+)\.m4s$/);
+
+    if (!isInit && !segmentMatch) {
+      return null;
+    }
+
+    const qualityIndex = parts.findIndex((part) => /^aac_\d+k$/i.test(part));
+
+    if (qualityIndex <= 0 || qualityIndex + 1 >= parts.length) {
+      return null;
+    }
+
+    const groupParts = parts.slice(0, qualityIndex + 2);
+    const groupKey = `${host}/${groupParts.join("/")}`;
+
+    return {
+      groupKey,
+      qualityLabel: parts[qualityIndex],
+      fileName,
+      isInit,
+      segmentIndex: segmentMatch ? Number(segmentMatch[1]) : null,
+      url
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getSoundCloudFallbackId(tabId, captureId, groupKey) {
+  return `soundcloud-${tabId}-${hashString(`${captureId}:${groupKey}`)}`;
+}
+
+function ensureSoundCloudFragmentGroup(tabId, activeCapture, fragmentInfo) {
+  if (!soundCloudFragmentGroupsByTabId[tabId]) {
+    soundCloudFragmentGroupsByTabId[tabId] = {};
+  }
+
+  const fallbackId = getSoundCloudFallbackId(
+    tabId,
+    activeCapture.captureId,
+    fragmentInfo.groupKey
+  );
+
+  if (!soundCloudFragmentGroupsByTabId[tabId][fallbackId]) {
+    soundCloudFragmentGroupsByTabId[tabId][fallbackId] = {
+      id: fallbackId,
+      tabId,
+      captureId: activeCapture.captureId,
+      trackTitle: activeCapture.trackTitle || "media",
+      groupKey: fragmentInfo.groupKey,
+      qualityLabel: fragmentInfo.qualityLabel || null,
+      initUrl: null,
+      segmentsByIndex: {},
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+  }
+
+  return soundCloudFragmentGroupsByTabId[tabId][fallbackId];
+}
+
+function rememberSoundCloudFragmentFallback(tabId, activeCapture, url) {
+  if (!activeCapture || !url) return null;
+
+  const fragmentInfo = getSoundCloudFragmentInfo(url);
+
+  if (!fragmentInfo) {
+    return null;
+  }
+
+  const group = ensureSoundCloudFragmentGroup(tabId, activeCapture, fragmentInfo);
+
+  if (fragmentInfo.isInit) {
+    group.initUrl = fragmentInfo.url;
+  } else if (Number.isFinite(fragmentInfo.segmentIndex)) {
+    group.segmentsByIndex[String(fragmentInfo.segmentIndex)] = fragmentInfo.url;
+  }
+
+  group.updatedAt = Date.now();
+  soundCloudFallbackPlaylistsById[group.id] = group;
+
+  return group;
+}
+
+function getSoundCloudGroupSegmentCount(group) {
+  if (!group || !group.segmentsByIndex) return 0;
+
+  return Object.keys(group.segmentsByIndex).length;
+}
+
+function getBestSoundCloudFallbackForCapture(tabId, captureId) {
+  const groups = Object.values(soundCloudFragmentGroupsByTabId[tabId] || {})
+    .filter((group) => group.captureId === captureId)
+    .filter((group) => group.initUrl && getSoundCloudGroupSegmentCount(group) > 0)
+    .sort((a, b) => {
+      const segmentDiff = getSoundCloudGroupSegmentCount(b) - getSoundCloudGroupSegmentCount(a);
+
+      if (segmentDiff !== 0) {
+        return segmentDiff;
+      }
+
+      return b.updatedAt - a.updatedAt;
+    });
+
+  return groups[0] || null;
+}
+
+function escapeHlsQuotedUri(url) {
+  return String(url || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
+}
+
+function buildSoundCloudObservedPlaylist(group) {
+  if (!group || !group.initUrl) {
+    return null;
+  }
+
+  const segments = Object.entries(group.segmentsByIndex || {})
+    .map(([index, url]) => {
+      return {
+        index: Number(index),
+        url
+      };
+    })
+    .filter((segment) => Number.isFinite(segment.index) && segment.url)
+    .sort((a, b) => a.index - b.index);
+
+  if (segments.length === 0) {
+    return null;
+  }
+
+  const firstIndex = segments[0].index;
+
+  const lines = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:7",
+    "#EXT-X-TARGETDURATION:10",
+    `#EXT-X-MEDIA-SEQUENCE:${firstIndex}`,
+    `#EXT-X-MAP:URI="${escapeHlsQuotedUri(group.initUrl)}"`
+  ];
+
+  segments.forEach((segment) => {
+    lines.push("#EXTINF:10.000,");
+    lines.push(segment.url);
+  });
+
+  return lines.join("\n");
+}
+
+function attachSoundCloudFallbackToCapturedStream(tabId, capturedStream) {
+  if (!capturedStream || !capturedStream.captureId) {
+    return capturedStream;
+  }
+
+  const fallbackGroup = getBestSoundCloudFallbackForCapture(
+    tabId,
+    capturedStream.captureId
+  );
+
+  if (!fallbackGroup) {
+    return capturedStream;
+  }
+
+  return {
+    ...capturedStream,
+    soundCloudFallbackPlaylistId: fallbackGroup.id,
+    soundCloudFallbackSegmentCount: getSoundCloudGroupSegmentCount(fallbackGroup),
+    soundCloudFallbackQuality: fallbackGroup.qualityLabel || null
+  };
+}
+
+function resendCapturedStreamWithFallbackIfNeeded(tabId, activeCapture, existingCapturedStream) {
+  if (!existingCapturedStream || !activeCapture) {
+    return;
+  }
+
+  const oldFallbackId = existingCapturedStream.soundCloudFallbackPlaylistId || null;
+  const enrichedStream = attachSoundCloudFallbackToCapturedStream(tabId, existingCapturedStream);
+  const newFallbackId = enrichedStream.soundCloudFallbackPlaylistId || null;
+
+  if (!newFallbackId || newFallbackId === oldFallbackId) {
+    return;
+  }
+
+  capturedStreamsByTabId[tabId][activeCapture.captureId] = enrichedStream;
+
+  chrome.tabs.sendMessage(
+    tabId,
+    {
+      type: "MEDIA_DOWNLOADER_CAPTURED_STREAM",
+      captureId: activeCapture.captureId,
+      stream: enrichedStream
+    },
+    () => {
+      if (chrome.runtime.lastError) {
+        // ignore
+      }
+    }
+  );
+}
+
+function cleanupSoundCloudFallbacksForTab(tabId) {
+  delete soundCloudFragmentGroupsByTabId[tabId];
+
+  Object.keys(soundCloudFallbackPlaylistsById).forEach((fallbackId) => {
+    if (soundCloudFallbackPlaylistsById[fallbackId]?.tabId === tabId) {
+      delete soundCloudFallbackPlaylistsById[fallbackId];
+    }
+  });
 }
 
 function shouldIgnoreCaptureResponseDiagnostic(details, contentType = "") {
@@ -474,6 +764,10 @@ function isManifestLikeStream(streamInfo, url) {
 
 function isFragmentLikeUrl(url) {
   if (!url) return false;
+
+  if (isSoundCloudPlaybackHlsEndpoint(url)) {
+    return false;
+  }
 
   try {
     const parsedUrl = new URL(url);
@@ -729,6 +1023,8 @@ function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}) {
     capturedStreamsByTabId[tabId] = {};
   }
 
+  rememberSoundCloudFragmentFallback(tabId, activeCapture, url);
+
   const isManifestLike = isManifestLikeStream(streamInfo, url);
   const isFragmentLike = isFragmentLikeUrl(url);
   const captureScore = getCaptureCandidateScore(url, streamInfo, meta);
@@ -750,6 +1046,7 @@ function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}) {
   const existingCapturedStream = capturedStreamsByTabId[tabId][activeCapture.captureId] || null;
 
   if (!shouldReplaceCapturedStream(existingCapturedStream, capturedStream)) {
+    resendCapturedStreamWithFallbackIfNeeded(tabId, activeCapture, existingCapturedStream);
     if (isFragmentLike && !existingCapturedStream?.isFragmentLike) {
       rememberDiagnostic(
         tabId,
@@ -816,14 +1113,16 @@ function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}) {
     }
   }
 
-  capturedStreamsByTabId[tabId][activeCapture.captureId] = capturedStream;
+  const streamForContent = attachSoundCloudFallbackToCapturedStream(tabId, capturedStream);
+
+  capturedStreamsByTabId[tabId][activeCapture.captureId] = streamForContent;
 
   chrome.tabs.sendMessage(
     tabId,
     {
       type: "MEDIA_DOWNLOADER_CAPTURED_STREAM",
       captureId: activeCapture.captureId,
-      stream: capturedStream
+      stream: streamForContent
     },
     () => {
       if (chrome.runtime.lastError) {
@@ -832,7 +1131,7 @@ function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}) {
     }
   );
 
-  console.log("[Media Downloader] Stream bound to capture:", capturedStream);
+  console.log("[Media Downloader] Stream bound to capture:", streamForContent);
 }
 
 chrome.webRequest.onBeforeRequest.addListener(
@@ -844,6 +1143,7 @@ chrome.webRequest.onBeforeRequest.addListener(
 
     rememberStream(details.tabId, details.url, streamInfo, {
       source: "url",
+      qualityLabel: streamInfo.qualityLabel || null,
       detector: "onBeforeRequest",
       requestType: details.type || null,
       method: details.method || null,
@@ -851,6 +1151,8 @@ chrome.webRequest.onBeforeRequest.addListener(
     });
 
     rememberStreamForActiveCapture(details.tabId, details.url, streamInfo, {
+      source: streamInfo.source || "url",
+      qualityLabel: streamInfo.qualityLabel || null,
       requestType: details.type || null,
       method: details.method || null,
       initiator: details.initiator || null
@@ -913,6 +1215,7 @@ chrome.webRequest.onHeadersReceived.addListener(
 
     rememberStream(details.tabId, details.url, streamInfo, {
       source: "headers",
+      qualityLabel: streamInfo.qualityLabel || null,
       detector: "onHeadersReceived",
       requestType: details.type || null,
       method: details.method || null,
@@ -925,6 +1228,8 @@ chrome.webRequest.onHeadersReceived.addListener(
     });
 
     rememberStreamForActiveCapture(details.tabId, details.url, streamInfo, {
+      source: streamInfo.source || "headers",
+      qualityLabel: streamInfo.qualityLabel || null,
       requestType: details.type || null,
       method: details.method || null,
       statusCode: details.statusCode || null,
@@ -948,6 +1253,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   delete diagnosticsByTabId[tabId];
   delete diagnosticSignaturesByTabId[tabId];
   delete scanSummariesByTabId[tabId];
+  cleanupSoundCloudFallbacksForTab(tabId);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -959,9 +1265,51 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   delete diagnosticsByTabId[tabId];
   delete diagnosticSignaturesByTabId[tabId];
   delete scanSummariesByTabId[tabId];
+  cleanupSoundCloudFallbacksForTab(tabId);
 });
 
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+  if (message.type === "GET_SOUNDCLOUD_FALLBACK_PLAYLIST") {
+  const fallbackId = message.fallbackPlaylistId;
+  const group = soundCloudFallbackPlaylistsById[fallbackId];
+
+  if (!group) {
+    sendResponse({
+      ok: false,
+      error: "SoundCloud fallback playlist not found"
+    });
+
+    return;
+  }
+
+  const playlistText = buildSoundCloudObservedPlaylist(group);
+
+  if (!playlistText) {
+    sendResponse({
+      ok: false,
+      error: "SoundCloud fallback playlist is not ready yet"
+    });
+
+    return;
+  }
+
+  sendResponse({
+    ok: true,
+    playlistUrl: `https://soundcloud.local/fallback/${encodeURIComponent(group.id)}.m3u8`,
+    playlistText,
+    source: "soundcloud-observed-fragments",
+    trackTitle: group.trackTitle || "media",
+    qualityLabel: group.qualityLabel || null,
+    segmentCount: getSoundCloudGroupSegmentCount(group),
+    hasInit: Boolean(group.initUrl),
+    warning: "Fallback собран только из уже замеченных SoundCloud fragments. Для полного трека нужно, чтобы были пойманы все сегменты или чтобы API playlist открылся напрямую."
+  });
+
+  return;
+}
+
   if (message.type === "DOWNLOAD_MEDIA") {
     chrome.downloads.download(
       {

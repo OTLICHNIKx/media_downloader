@@ -294,35 +294,83 @@
       </p>
     </section>
         <section class="card">
-      <h2>12. Popup v0.3: фильтры Audio / Video / Stream</h2>
+        <h2>12. Popup v0.3: фильтры Audio / Video / Stream</h2>
 
-      <p>
-        Нажми кнопки ниже, потом открой popup. В списке должны появиться разные типы потоков,
-        а фильтры Audio, Video и Stream должны скрывать лишнее.
-      </p>
+        <p>
+          Нажми кнопки ниже, потом открой popup. В списке должны появиться разные типы потоков,
+          а фильтры Audio, Video и Stream должны скрывать лишнее.
+        </p>
 
-      <div class="button-row">
-        <button id="testPopupAudioButton" type="button">
-          Fetch Audio
-        </button>
+        <div class="button-row">
+          <button id="testPopupAudioButton" type="button">
+            Fetch Audio
+          </button>
 
-        <button id="testPopupVideoButton" type="button">
-          Fetch Video
-        </button>
+          <button id="testPopupVideoButton" type="button">
+            Fetch Video
+          </button>
 
-        <button id="testPopupHlsButton" type="button">
-          Fetch HLS Stream
-        </button>
+          <button id="testPopupHlsButton" type="button">
+            Fetch HLS Stream
+          </button>
 
-        <button id="testPopupDashButton" type="button">
-          Fetch DASH Stream
-        </button>
-      </div>
+          <button id="testPopupDashButton" type="button">
+            Fetch DASH Stream
+          </button>
+        </div>
 
-      <p id="popupV03Status" class="hint">
-        v0.3 popup-тест ещё не запускался.
-      </p>
-    </section>
+        <p id="popupV03Status" class="hint">
+          v0.3 popup-тест ещё не запускался.
+        </p>
+      </section>
+      <section
+    class="card"
+    data-media-adapter-card
+    data-media-title="SoundCloud API HLS endpoint"
+    data-media-author="SoundCloud Test"
+  >
+    <h2>13. SoundCloud API HLS endpoint detection</h2>
+
+    <p>
+      Эта карточка имитирует SoundCloud: URL не заканчивается на .m3u8,
+      но содержит /media/soundcloud:tracks:/stream/hls.
+      Расширение должно распознать его как HLS stream.
+    </p>
+
+    <div class="button-row">
+      <button id="playSoundCloudApiHlsButton" type="button">
+        Fetch SoundCloud API HLS endpoint
+      </button>
+    </div>
+
+    <p id="soundCloudApiHlsStatus" class="hint">
+      SoundCloud API HLS endpoint ещё не запрашивался.
+    </p>
+  </section>
+    <section class="card">
+  <h2>14. HLS downloader: JSON endpoint unwrap</h2>
+
+  <p>
+    Эта ссылка имитирует API endpoint, который возвращает JSON с реальным playlist URL.
+    HLS Downloader должен раскрыть JSON и скачать playlist.m3u8.
+  </p>
+
+  <a href="test_hls/soundcloud-playback-api.json?format=hls">
+    Open simulated SoundCloud playback JSON
+  </a>
+</section>
+    <section class="card">
+  <h2>15. SoundCloud-like AAC fMP4 audio</h2>
+
+  <p>
+    Проверка расширения: HLS playlist содержит init.mp4 и .m4s audio fragments.
+    Результат должен сохраняться как .m4a, а не .mp4.
+  </p>
+
+  <a href="test_hls/soundcloud-aac-fmp4.m3u8">
+    Open SoundCloud-like AAC fMP4 playlist
+  </a>
+</section>
   </main>
 <script>
   const playDynamicHlsButton = document.getElementById("playDynamicHlsButton");
@@ -540,6 +588,30 @@
       }
     });
   }
+  const playSoundCloudApiHlsButton = document.getElementById("playSoundCloudApiHlsButton");
+const soundCloudApiHlsStatus = document.getElementById("soundCloudApiHlsStatus");
+
+if (playSoundCloudApiHlsButton && soundCloudApiHlsStatus) {
+  playSoundCloudApiHlsButton.addEventListener("click", async () => {
+    soundCloudApiHlsStatus.textContent = "Отправляю SoundCloud-like HLS API запрос...";
+
+    try {
+      await fetch(
+        `https://api-v2.soundcloud.com/media/soundcloud:tracks:123456789/stream/hls?client_id=test&track_authorization=test&t=${Date.now()}`,
+        {
+          mode: "no-cors",
+          cache: "no-store"
+        }
+      );
+
+      soundCloudApiHlsStatus.textContent =
+        "Запрос отправлен. Если background.js сработал, справа сверху на карточке появится HLS-кнопка. Сам downloader может получить 401 — это нормально для fake endpoint.";
+    } catch (error) {
+      soundCloudApiHlsStatus.textContent =
+        `Запрос заблокирован браузером, но webRequest мог успеть его увидеть: ${error.message}`;
+    }
+  });
+}
 </script>
 </body>
 </html>

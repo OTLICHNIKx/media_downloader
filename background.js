@@ -535,6 +535,20 @@ function rememberStreamForActiveCapture(tabId, url, streamInfo) {
   const now = Date.now();
 
   if (now > activeCapture.expiresAt) {
+    rememberDiagnostic(
+      tabId,
+      "capture-timeout-no-stream",
+      "Время ожидания capture истекло: подходящий поток не был найден.",
+      {
+        captureId: activeCapture.captureId,
+        trackTitle: activeCapture.trackTitle || "media",
+        startedAt: activeCapture.startedAt,
+        expiresAt: activeCapture.expiresAt,
+        lastObservedUrl: url,
+        lastObservedType: streamInfo.type
+      }
+    );
+
     delete activeCapturesByTabId[tabId];
     return;
   }
@@ -710,6 +724,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       startedAt: Date.now(),
       expiresAt: Date.now() + timeoutMs
     };
+
+    setTimeout(() => {
+      const activeCapture = activeCapturesByTabId[tabId];
+
+      if (!activeCapture || activeCapture.captureId !== message.captureId) {
+        return;
+      }
+
+      rememberDiagnostic(
+        tabId,
+        "capture-timeout-no-stream",
+        "Capture завершился без найденного поддерживаемого потока.",
+        {
+          captureId: activeCapture.captureId,
+          trackTitle: activeCapture.trackTitle || "media",
+          startedAt: activeCapture.startedAt,
+          expiresAt: activeCapture.expiresAt,
+          timeoutMs
+        }
+      );
+
+      delete activeCapturesByTabId[tabId];
+    }, timeoutMs + 250);
 
     sendResponse({
       ok: true,

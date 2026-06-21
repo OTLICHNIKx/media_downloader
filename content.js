@@ -16,20 +16,34 @@ let mediaDownloaderLastLocation = window.location.href;
 
 let mediaDownloaderUiEnabled = true;
 let mediaDownloaderLastDiagnosticReportAt = 0;
-let mediaDownloaderLastDiagnosticReportAt = 0;
 const HLS_PANEL_ID = "media-downloader-hls-panel";
 const DASH_PANEL_ID = "media-downloader-dash-panel";
-const SUPPORTED_EXTENSIONS = [
+const AUDIO_EXTENSIONS = [
   "mp3",
   "m4a",
   "aac",
   "ogg",
   "opus",
   "wav",
-  "flac",
+  "flac"
+];
+
+const VIDEO_EXTENSIONS = [
   "mp4",
+  "webm",
+  "m4v",
+  "mov"
+];
+
+const STREAM_EXTENSIONS = [
   "m3u8",
   "mpd"
+];
+
+const SUPPORTED_EXTENSIONS = [
+  ...AUDIO_EXTENSIONS,
+  ...VIDEO_EXTENSIONS,
+  ...STREAM_EXTENSIONS
 ];
 
 
@@ -44,6 +58,59 @@ function normalizeUrl(url) {
   }
 }
 
+function getStreamTypeFromExtension(extension) {
+  const cleanExtension = String(extension || "").replace(/^\./, "").toLowerCase();
+
+  if (cleanExtension === "m3u8") return "hls";
+  if (cleanExtension === "mpd") return "dash";
+  if (AUDIO_EXTENSIONS.includes(cleanExtension)) return "audio";
+  if (VIDEO_EXTENSIONS.includes(cleanExtension)) return "video";
+
+  return null;
+}
+
+function getExtensionFromQueryParams(parsedUrl) {
+  const values = [];
+
+  parsedUrl.searchParams.forEach((value, key) => {
+    values.push(`${key}=${value}`);
+  });
+
+  const queryText = values.join("&").toLowerCase();
+  if (!queryText) return null;
+
+  if (
+    queryText.includes("m3u8") ||
+    queryText.includes("mpegurl") ||
+    queryText.includes("hls")
+  ) {
+    return "m3u8";
+  }
+
+  if (
+    queryText.includes("mpd") ||
+    queryText.includes("dash")
+  ) {
+    return "mpd";
+  }
+
+  for (const extension of SUPPORTED_EXTENSIONS) {
+    if (
+      queryText.includes(`format=${extension}`) ||
+      queryText.includes(`ext=${extension}`) ||
+      queryText.includes(`type=${extension}`) ||
+      queryText.includes(`mime=audio/${extension}`) ||
+      queryText.includes(`mime=video/${extension}`) ||
+      queryText.includes(`audio/${extension}`) ||
+      queryText.includes(`video/${extension}`)
+    ) {
+      return extension;
+    }
+  }
+
+  return null;
+}
+
 function getExtensionFromUrl(url) {
   try {
     const parsedUrl = new URL(url);
@@ -55,9 +122,10 @@ function getExtensionFromUrl(url) {
       if (href.includes(`.${extension}?`)) return extension;
       if (href.includes(`.${extension}&`)) return extension;
       if (href.includes(`.${extension}#`)) return extension;
+      if (href.includes(`%2e${extension}`)) return extension;
     }
 
-    return null;
+    return getExtensionFromQueryParams(parsedUrl);
   } catch {
     return null;
   }
@@ -106,6 +174,7 @@ function buildHlsMediaItem(url, source = "latest-hls") {
   return {
     url: normalizedUrl,
     extension: "m3u8",
+    streamType: "hls",
     quality: "HLS",
     filename: getFileName(normalizedUrl) || "media.m3u8",
     source
@@ -122,9 +191,13 @@ function buildMediaItem(url, source = "page") {
   const extension = getExtensionFromUrl(normalizedUrl);
   if (!extension) return null;
 
+  const streamType = getStreamTypeFromExtension(extension);
+  if (!streamType) return null;
+
   return {
     url: normalizedUrl,
     extension,
+    streamType,
     quality: guessQuality(normalizedUrl),
     filename: getFileName(normalizedUrl),
     source
@@ -1112,10 +1185,11 @@ function reportMediaDownloaderScanSummary(message, data = {}) {
   );
 }
 
-function reportMediaDownloaderDiagnostic(code, message, data = {}) {
+function reportMediaDownloaderDiagnostic(code, message, data = {}, options = {}) {
   const now = Date.now();
+  const throttleMs = Number(options.throttleMs || 3000);
 
-  if (now - mediaDownloaderLastDiagnosticReportAt < 3000) {
+  if (throttleMs > 0 && now - mediaDownloaderLastDiagnosticReportAt < throttleMs) {
     return;
   }
 
@@ -1134,6 +1208,80 @@ function reportMediaDownloaderDiagnostic(code, message, data = {}) {
       }
     }
   );
+}
+
+function hasVisibleBlobMediaElement() {
+  return Array.from(document.querySelectorAll("audio, video")).some((mediaElement) => {
+    if (!isElementReallyVisible(mediaElement)) return false;
+
+    const currentSrc = normalizeUrl(mediaElement.currentSrc || "");
+    const directSrc = normalizeUrl(mediaElement.getAttribute("src") || "");
+    const sourceSrc = normalizeUrl(mediaElement.querySelector("source[src]")?.getAttribute("src") || "");
+
+    return [currentSrc, directSrc, sourceSrc].some((value) => String(value || "").startsWith("blob:"));
+  });
+}
+
+function reportScanDiagnostics(stats, adapter) {
+  if (!stats) return;
+
+  const totalDirectFound = Number(stats.inlineLinkMediaFound || 0) + Number(stats.inlineMediaFound || 0);
+  const adapterName = adapter?.name || stats.adapter || null;
+  const baseData = {
+    host: stats.host || window.location.hostname,
+    adapter: adapterName,
+    adapterCandidates: Number(stats.adapterCandidates || 0),
+    visibleMediaElements: Number(stats.visibleMediaElements || 0),
+    visibleLinks: Number(stats.visibleLinks || 0),
+    directFound: totalDirectFound,
+    buttonsOnPage: Number(stats.buttonsOnPage || 0),
+    latestHlsChecks: Number(stats.latestHlsChecks || 0),
+    pageUrl: window.location.href
+  };
+
+  if (adapterName && baseData.adapterCandidates > 0 && totalDirectFound === 0) {
+    reportMediaDownloaderDiagnostic(
+      "adapter-detected-no-direct-media",
+      `Адаптер ${adapterName} найден, но прямые media-элементы не обнаружены.`,
+      baseData,
+      {
+        throttleMs: 1000
+      }
+    );
+  }
+
+  if (adapterName && baseData.adapterCandidates > 0 && baseData.buttonsOnPage === 0) {
+    reportMediaDownloaderDiagnostic(
+      "adapter-candidates-found-no-buttons",
+      `На странице есть кандидаты адаптера ${adapterName}, но inline-кнопки не добавлены.`,
+      baseData,
+      {
+        throttleMs: 1000
+      }
+    );
+  }
+
+  if (baseData.visibleMediaElements > 0 && hasVisibleBlobMediaElement()) {
+    reportMediaDownloaderDiagnostic(
+      "blob-player-detected",
+      "Обнаружен blob/MSE-плеер: прямой media URL может быть недоступен со страницы.",
+      baseData,
+      {
+        throttleMs: 1000
+      }
+    );
+  }
+
+  if (adapterName && totalDirectFound === 0 && baseData.visibleMediaElements > 0) {
+    reportMediaDownloaderDiagnostic(
+      "site-needs-network-capture",
+      `Сайт ${adapterName} показывает media-плеер, но прямой поток нужно ловить через Network/capture.`,
+      baseData,
+      {
+        throttleMs: 1000
+      }
+    );
+  }
 }
 
 function scanAndAddIcons() {
@@ -1224,6 +1372,8 @@ function scanAndAddIcons() {
   });
 
   stats.buttonsOnPage = document.querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}`).length;
+
+  reportScanDiagnostics(stats, adapter);
 
   const totalDirectFound = stats.inlineLinkMediaFound + stats.inlineMediaFound;
 
@@ -1442,6 +1592,25 @@ document.addEventListener(
 );
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+  if (message.type === "RESCAN_MEDIA_DOWNLOADER_PAGE") {
+    try {
+      scanAndAddIcons();
+
+      sendResponse({
+        ok: true,
+        media: collectMediaLinks()
+      });
+    } catch (error) {
+      sendResponse({
+        ok: false,
+        error: error.message || "Rescan failed"
+      });
+    }
+
+    return;
+  }
+
   if (message.type === "SCAN_MEDIA") {
     const media = collectMediaLinks();
 

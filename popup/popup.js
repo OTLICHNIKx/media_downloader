@@ -6,7 +6,12 @@ const diagnosticsListElement = document.getElementById("diagnosticsList");
 const refreshButtonElement = document.getElementById("refreshButton");
 const clearButtonElement = document.getElementById("clearButton");
 const openPanelButtonElement = document.getElementById("openPanelButton");
+const streamsCounterElement = document.getElementById("streamsCounter");
+const filterButtonElements = Array.from(document.querySelectorAll("[data-stream-filter]"));
+
 let currentTab = null;
+let currentFilter = "all";
+let currentStreams = [];
 
 function getDisabledSites(callback) {
   chrome.storage.local.get(
@@ -78,6 +83,52 @@ function formatStreamType(stream) {
   return stream.type || "media";
 }
 
+function getStreamTypeFromExtension(extension) {
+  const cleanExtension = String(extension || "").replace(/^\./, "").toLowerCase();
+
+  if (cleanExtension === "m3u8") return "hls";
+  if (cleanExtension === "mpd") return "dash";
+
+  if (["mp3", "m4a", "aac", "ogg", "opus", "wav", "flac"].includes(cleanExtension)) {
+    return "audio";
+  }
+
+  if (["mp4", "webm", "m4v", "mov"].includes(cleanExtension)) {
+    return "video";
+  }
+
+  return "media";
+}
+
+function getFilteredStreams(streams) {
+  if (currentFilter === "all") {
+    return streams;
+  }
+
+  if (currentFilter === "stream") {
+    return streams.filter((stream) => stream.type === "hls" || stream.type === "dash");
+  }
+
+  return streams.filter((stream) => stream.type === currentFilter);
+}
+
+function updateFilterButtons() {
+  filterButtonElements.forEach((button) => {
+    button.classList.toggle("active", button.dataset.streamFilter === currentFilter);
+  });
+}
+
+function setStreamsCounter(totalCount, visibleCount) {
+  if (!streamsCounterElement) return;
+
+  if (currentFilter === "all") {
+    streamsCounterElement.textContent = String(totalCount);
+    return;
+  }
+
+  streamsCounterElement.textContent = `${visibleCount}/${totalCount}`;
+}
+
 function sanitizeFilename(filename) {
   return filename
     .replace(/[\\/:*?"<>|]/g, "_")
@@ -102,8 +153,68 @@ function getFilenameFromUrl(url, fallbackExtension = "media") {
 }
 
 function getStreamFilename(stream) {
+  if (stream.filename) return sanitizeFilename(stream.filename);
+
   const extension = stream.extension || "media";
   return getFilenameFromUrl(stream.url, extension);
+}
+
+function normalizePageMediaItem(mediaItem) {
+  if (!mediaItem || !mediaItem.url) return null;
+
+  const extension = mediaItem.extension || "media";
+  const type = mediaItem.streamType || getStreamTypeFromExtension(extension);
+
+  return {
+    url: mediaItem.url,
+    type,
+    extension,
+    contentType: null,
+    contentLength: null,
+    qualityLabel: mediaItem.quality && mediaItem.quality !== "unknown" ? mediaItem.quality : null,
+    source: mediaItem.source ? `page:${mediaItem.source}` : "page",
+    requestType: "page-scan",
+    foundAt: Date.now(),
+    filename: mediaItem.filename || getFilenameFromUrl(mediaItem.url, extension)
+  };
+}
+
+function mergeStreams(backgroundStreams, pageMediaItems) {
+  const resultByUrl = new Map();
+
+  (backgroundStreams || []).forEach((stream) => {
+    if (!stream || !stream.url) return;
+    resultByUrl.set(stream.url, { ...stream });
+  });
+
+  (pageMediaItems || []).forEach((mediaItem) => {
+    const pageStream = normalizePageMediaItem(mediaItem);
+    if (!pageStream) return;
+
+    const existingStream = resultByUrl.get(pageStream.url);
+
+    if (existingStream) {
+      resultByUrl.set(pageStream.url, {
+        ...existingStream,
+        type: existingStream.type || pageStream.type,
+        extension: existingStream.extension || pageStream.extension,
+        qualityLabel: existingStream.qualityLabel || pageStream.qualityLabel,
+        filename: existingStream.filename || pageStream.filename,
+        source:
+          existingStream.source && !existingStream.source.includes(pageStream.source)
+            ? `${existingStream.source}+${pageStream.source}`
+            : existingStream.source || pageStream.source
+      });
+
+      return;
+    }
+
+    resultByUrl.set(pageStream.url, pageStream);
+  });
+
+  return Array.from(resultByUrl.values()).sort((a, b) => {
+    return Number(b.foundAt || b.updatedAt || 0) - Number(a.foundAt || a.updatedAt || 0);
+  });
 }
 
 function formatBytes(bytes) {
@@ -262,19 +373,31 @@ function createStreamElement(stream) {
   return item;
 }
 
-function renderStreams(streams) {
+function renderStreams(streams = currentStreams) {
   streamsListElement.innerHTML = "";
 
-  if (!streams || streams.length === 0) {
+  const allStreams = Array.isArray(streams) ? streams : [];
+  const filteredStreams = getFilteredStreams(allStreams);
+
+  setStreamsCounter(allStreams.length, filteredStreams.length);
+  updateFilterButtons();
+
+  if (allStreams.length === 0) {
     streamsListElement.className = "list-box empty";
     streamsListElement.textContent =
-      "Пока ничего не найдено. Запусти воспроизведение на странице и обнови popup.";
+      "Пока ничего не найдено. Нажми Rescan или запусти воспроизведение на странице.";
+    return;
+  }
+
+  if (filteredStreams.length === 0) {
+    streamsListElement.className = "list-box empty";
+    streamsListElement.textContent = "В этом фильтре потоков нет.";
     return;
   }
 
   streamsListElement.className = "list-box";
 
-  streams.forEach((stream) => {
+  filteredStreams.forEach((stream) => {
     streamsListElement.appendChild(createStreamElement(stream));
   });
 }
@@ -301,6 +424,32 @@ function getScanSummaryParts(scanSummary) {
   if (scanSummary.updatedAt) {
     parts.push(formatTime(scanSummary.updatedAt));
   }
+
+  return parts;
+}
+
+function getDiagnosticMetaParts(diagnostic) {
+  if (!diagnostic) return [];
+
+  const parts = [];
+  const data = diagnostic.data || {};
+
+  if (diagnostic.code) parts.push(diagnostic.code);
+  if (data.adapter) parts.push(`adapter: ${data.adapter}`);
+  if (Number.isFinite(Number(data.adapterCandidates)) && Number(data.adapterCandidates) > 0) {
+    parts.push(`кандидатов: ${Number(data.adapterCandidates)}`);
+  }
+  if (data.contentType) parts.push(`type: ${data.contentType}`);
+  if (data.statusCode) parts.push(`status: ${data.statusCode}`);
+  if (data.trackTitle) parts.push(`track: ${data.trackTitle}`);
+
+  const diagnosticUrl = data.url || data.lastObservedUrl || data.pageUrl;
+  if (diagnosticUrl) {
+    const host = getHostFromUrl(diagnosticUrl);
+    if (host) parts.push(`host: ${host}`);
+  }
+
+  if (diagnostic.createdAt) parts.push(formatTime(diagnostic.createdAt));
 
   return parts;
 }
@@ -347,16 +496,19 @@ function renderDiagnostics(diagnostics, scanSummary = null) {
 
     const meta = document.createElement("div");
     meta.className = "diagnostic-meta";
-
-    const parts = [];
-
-    if (diagnostic.code) parts.push(diagnostic.code);
-    if (diagnostic.createdAt) parts.push(formatTime(diagnostic.createdAt));
-
-    meta.textContent = parts.join(" · ");
+    meta.textContent = getDiagnosticMetaParts(diagnostic).join(" · ");
 
     item.appendChild(title);
     item.appendChild(meta);
+
+    const diagnosticUrl = diagnostic?.data?.url || diagnostic?.data?.lastObservedUrl;
+
+    if (diagnosticUrl) {
+      const extra = document.createElement("div");
+      extra.className = "diagnostic-meta";
+      extra.textContent = diagnosticUrl;
+      item.appendChild(extra);
+    }
 
     diagnosticsListElement.appendChild(item);
   });
@@ -379,24 +531,88 @@ function openStreamsPanel() {
   });
 }
 
-function refreshMediaState() {
-  if (!currentTab || typeof currentTab.id !== "number") return;
-
-  chrome.runtime.sendMessage(
-    {
-      type: "GET_MEDIA_DOWNLOADER_STATE",
-      tabId: currentTab.id
-    },
-    (response) => {
-      if (!response || !response.ok) {
-        renderStreams([]);
-        renderDiagnostics([]);
+function sendRuntimeMessage(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve(null);
         return;
       }
 
-      renderStreams(response.streams || []);
-      renderDiagnostics(response.diagnostics || [], response.scanSummary || null);
-    }
+      resolve(response || null);
+    });
+  });
+}
+
+function sendTabMessage(tabId, message) {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve(null);
+        return;
+      }
+
+      resolve(response || null);
+    });
+  });
+}
+
+async function getBackgroundMediaState(tabId) {
+  const response = await sendRuntimeMessage({
+    type: "GET_MEDIA_DOWNLOADER_STATE",
+    tabId
+  });
+
+  if (!response || !response.ok) {
+    return {
+      streams: [],
+      diagnostics: [],
+      scanSummary: null
+    };
+  }
+
+  return {
+    streams: response.streams || [],
+    diagnostics: response.diagnostics || [],
+    scanSummary: response.scanSummary || null
+  };
+}
+
+async function getPageMediaItems(tabId, forceRescan = false) {
+  const response = await sendTabMessage(tabId, {
+    type: forceRescan ? "RESCAN_MEDIA_DOWNLOADER_PAGE" : "SCAN_MEDIA"
+  });
+
+  if (!response || !response.ok) {
+    return [];
+  }
+
+  return response.media || [];
+}
+
+async function refreshMediaState(options = {}) {
+  if (!currentTab || typeof currentTab.id !== "number") return;
+
+  const forceRescan = Boolean(options.forceRescan);
+
+  if (forceRescan) {
+    setStatus("Сканирую страницу и Network-потоки...");
+  }
+
+  const [backgroundState, pageMediaItems] = await Promise.all([
+    getBackgroundMediaState(currentTab.id),
+    getPageMediaItems(currentTab.id, forceRescan)
+  ]);
+
+  currentStreams = mergeStreams(backgroundState.streams, pageMediaItems);
+
+  renderStreams(currentStreams);
+  renderDiagnostics(backgroundState.diagnostics, backgroundState.scanSummary);
+
+  setStatus(
+    currentStreams.length > 0
+      ? `Найдено: ${currentStreams.length}. Фильтр: ${currentFilter}.`
+      : "Потоки пока не найдены. Запусти воспроизведение или нажми Rescan."
   );
 }
 
@@ -458,11 +674,23 @@ async function initPopup() {
     });
   });
 
-  refreshButtonElement.addEventListener("click", refreshMediaState);
+  refreshButtonElement.addEventListener("click", () => {
+  refreshMediaState({ forceRescan: true });
+});
+
+  filterButtonElements.forEach((button) => {
+    button.addEventListener("click", () => {
+      currentFilter = button.dataset.streamFilter || "all";
+      renderStreams(currentStreams);
+      setStatus(`Фильтр: ${currentFilter}. Показано: ${getFilteredStreams(currentStreams).length}.`);
+    });
+  });
+
   openPanelButtonElement.addEventListener("click", openStreamsPanel);
   clearButtonElement.addEventListener("click", clearDiagnostics);
 
-  refreshMediaState();
+  refreshMediaState({ forceRescan: true });
+
   setInterval(() => {
     refreshMediaState();
   }, 3000);

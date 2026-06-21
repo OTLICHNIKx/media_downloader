@@ -31,10 +31,16 @@
     <p id="status" class="status"></p>
         <section class="popup-section">
       <div class="section-header">
-        <h2>Найденные потоки</h2>
-        <button id="refreshButton" class="small-button" type="button">Обновить</button>
+        <h2>Найденные потоки <span id="streamsCounter" class="counter">0</span></h2>
+        <button id="refreshButton" class="small-button" type="button">Rescan</button>
       </div>
 
+      <div class="stream-filters" aria-label="Фильтры потоков">
+        <button class="filter-chip active" type="button" data-stream-filter="all">Все</button>
+        <button class="filter-chip" type="button" data-stream-filter="audio">Audio</button>
+        <button class="filter-chip" type="button" data-stream-filter="video">Video</button>
+        <button class="filter-chip" type="button" data-stream-filter="stream">Stream</button>
+      </div>
       <div id="streamsList" class="list-box empty">
         Пока ничего не найдено. Запусти воспроизведение на странице и обнови popup.
       </div>

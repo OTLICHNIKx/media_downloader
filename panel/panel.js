@@ -100,8 +100,143 @@ function getFilenameFromUrl(url, fallbackExtension = "media") {
 }
 
 function getStreamFilename(stream) {
+  if (stream.filename) return sanitizeFilename(stream.filename);
+
   const extension = stream.extension || "media";
   return getFilenameFromUrl(stream.url, extension);
+}
+
+function getStreamTypeFromExtension(extension) {
+  const cleanExtension = String(extension || "").replace(/^\./, "").toLowerCase();
+
+  if (cleanExtension === "m3u8") return "hls";
+  if (cleanExtension === "mpd") return "dash";
+
+  if (["mp3", "m4a", "aac", "ogg", "opus", "wav", "flac"].includes(cleanExtension)) {
+    return "audio";
+  }
+
+  if (["mp4", "webm", "m4v", "mov"].includes(cleanExtension)) {
+    return "video";
+  }
+
+  return "media";
+}
+
+function normalizePageMediaItem(mediaItem) {
+  if (!mediaItem || !mediaItem.url) return null;
+
+  const extension = mediaItem.extension || "media";
+  const type = mediaItem.streamType || getStreamTypeFromExtension(extension);
+
+  return {
+    url: mediaItem.url,
+    type,
+    extension,
+    contentType: null,
+    contentLength: null,
+    qualityLabel: mediaItem.quality && mediaItem.quality !== "unknown" ? mediaItem.quality : null,
+    source: mediaItem.source ? `page:${mediaItem.source}` : "page",
+    requestType: "page-scan",
+    foundAt: Date.now(),
+    filename: mediaItem.filename || getFilenameFromUrl(mediaItem.url, extension)
+  };
+}
+
+function mergeStreams(backgroundStreams, pageMediaItems) {
+  const resultByUrl = new Map();
+
+  (backgroundStreams || []).forEach((stream) => {
+    if (!stream || !stream.url) return;
+    resultByUrl.set(stream.url, { ...stream });
+  });
+
+  (pageMediaItems || []).forEach((mediaItem) => {
+    const pageStream = normalizePageMediaItem(mediaItem);
+    if (!pageStream) return;
+
+    const existingStream = resultByUrl.get(pageStream.url);
+
+    if (existingStream) {
+      resultByUrl.set(pageStream.url, {
+        ...pageStream,
+        ...existingStream,
+        source:
+          existingStream.source && !existingStream.source.includes(pageStream.source)
+            ? `${existingStream.source}+${pageStream.source}`
+            : existingStream.source || pageStream.source,
+        qualityLabel: existingStream.qualityLabel || pageStream.qualityLabel,
+        filename: existingStream.filename || pageStream.filename
+      });
+
+      return;
+    }
+
+    resultByUrl.set(pageStream.url, pageStream);
+  });
+
+  return Array.from(resultByUrl.values()).sort((a, b) => {
+    return Number(b.foundAt || b.updatedAt || 0) - Number(a.foundAt || a.updatedAt || 0);
+  });
+}
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve(null);
+        return;
+      }
+
+      resolve(response || null);
+    });
+  });
+}
+
+function sendTabMessage(tabId, message) {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve(null);
+        return;
+      }
+
+      resolve(response || null);
+    });
+  });
+}
+
+async function getBackgroundMediaState(tabId) {
+  const response = await sendRuntimeMessage({
+    type: "GET_MEDIA_DOWNLOADER_STATE",
+    tabId
+  });
+
+  if (!response || !response.ok) {
+    return {
+      streams: [],
+      diagnostics: [],
+      scanSummary: null
+    };
+  }
+
+  return {
+    streams: response.streams || [],
+    diagnostics: response.diagnostics || [],
+    scanSummary: response.scanSummary || null
+  };
+}
+
+async function getPageMediaItems(tabId, forceRescan = false) {
+  const response = await sendTabMessage(tabId, {
+    type: forceRescan ? "RESCAN_MEDIA_DOWNLOADER_PAGE" : "SCAN_MEDIA"
+  });
+
+  if (!response || !response.ok) {
+    return [];
+  }
+
+  return response.media || [];
 }
 
 function getStreamMetaParts(stream) {
@@ -320,6 +455,32 @@ function getScanSummaryParts(scanSummary) {
   return parts;
 }
 
+function getDiagnosticMetaParts(diagnostic) {
+  if (!diagnostic) return [];
+
+  const parts = [];
+  const data = diagnostic.data || {};
+
+  if (diagnostic.code) parts.push(diagnostic.code);
+  if (data.adapter) parts.push(`adapter: ${data.adapter}`);
+  if (Number.isFinite(Number(data.adapterCandidates)) && Number(data.adapterCandidates) > 0) {
+    parts.push(`кандидатов: ${Number(data.adapterCandidates)}`);
+  }
+  if (data.contentType) parts.push(`type: ${data.contentType}`);
+  if (data.statusCode) parts.push(`status: ${data.statusCode}`);
+  if (data.trackTitle) parts.push(`track: ${data.trackTitle}`);
+
+  const diagnosticUrl = data.url || data.lastObservedUrl || data.pageUrl;
+  if (diagnosticUrl) {
+    const host = getHostFromUrl(diagnosticUrl);
+    if (host) parts.push(`host: ${host}`);
+  }
+
+  if (diagnostic.createdAt) parts.push(formatTime(diagnostic.createdAt));
+
+  return parts;
+}
+
 function renderDiagnostics() {
   diagnosticsListElement.innerHTML = "";
 
@@ -362,16 +523,19 @@ function renderDiagnostics() {
 
     const meta = document.createElement("div");
     meta.className = "diagnostic-meta";
-
-    const parts = [];
-
-    if (diagnostic.code) parts.push(diagnostic.code);
-    if (diagnostic.createdAt) parts.push(formatTime(diagnostic.createdAt));
-
-    meta.textContent = parts.join(" · ");
+    meta.textContent = getDiagnosticMetaParts(diagnostic).join(" · ");
 
     card.appendChild(title);
     card.appendChild(meta);
+
+    const diagnosticUrl = diagnostic?.data?.url || diagnostic?.data?.lastObservedUrl;
+
+    if (diagnosticUrl) {
+      const extra = document.createElement("div");
+      extra.className = "diagnostic-meta";
+      extra.textContent = diagnosticUrl;
+      card.appendChild(extra);
+    }
 
     diagnosticsListElement.appendChild(card);
   });
@@ -383,34 +547,25 @@ function renderAll() {
   renderDiagnostics();
 }
 
-function refreshState() {
+async function refreshState(options = {}) {
   if (!Number.isFinite(targetTabId)) {
     streamsListElement.className = "streams-list empty";
     streamsListElement.textContent = "Не удалось определить вкладку, для которой открыта панель.";
     return;
   }
 
-  chrome.runtime.sendMessage(
-    {
-      type: "GET_MEDIA_DOWNLOADER_STATE",
-      tabId: targetTabId
-    },
-    (response) => {
-      if (!response || !response.ok) {
-        currentStreams = [];
-        currentDiagnostics = [];
-        currentScanSummary = null;
-        renderAll();
-        return;
-      }
+  const forceRescan = Boolean(options.forceRescan);
 
-      currentStreams = response.streams || [];
-      currentDiagnostics = response.diagnostics || [];
-      currentScanSummary = response.scanSummary || null;
+  const [backgroundState, pageMediaItems] = await Promise.all([
+    getBackgroundMediaState(targetTabId),
+    getPageMediaItems(targetTabId, forceRescan)
+  ]);
 
-      renderAll();
-    }
-  );
+  currentStreams = mergeStreams(backgroundState.streams, pageMediaItems);
+  currentDiagnostics = backgroundState.diagnostics || [];
+  currentScanSummary = backgroundState.scanSummary || null;
+
+  renderAll();
 }
 
 function clearDiagnostics() {
@@ -445,7 +600,9 @@ function initPanel() {
     ? `${titleText} · ${host}`
     : titleText;
 
-  refreshButtonElement.addEventListener("click", refreshState);
+  refreshButtonElement.addEventListener("click", () => {
+    refreshState({ forceRescan: true });
+  });
   clearDiagnosticsButtonElement.addEventListener("click", clearDiagnostics);
 
   filterButtonElements.forEach((button) => {
@@ -454,7 +611,7 @@ function initPanel() {
     });
   });
 
-  refreshState();
+  refreshState({ forceRescan: true });
 
   setInterval(() => {
     refreshState();

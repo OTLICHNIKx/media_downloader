@@ -293,6 +293,36 @@
         Потоки ещё не запрашивались.
       </p>
     </section>
+        <section class="card">
+      <h2>12. Popup v0.3: фильтры Audio / Video / Stream</h2>
+
+      <p>
+        Нажми кнопки ниже, потом открой popup. В списке должны появиться разные типы потоков,
+        а фильтры Audio, Video и Stream должны скрывать лишнее.
+      </p>
+
+      <div class="button-row">
+        <button id="testPopupAudioButton" type="button">
+          Fetch Audio
+        </button>
+
+        <button id="testPopupVideoButton" type="button">
+          Fetch Video
+        </button>
+
+        <button id="testPopupHlsButton" type="button">
+          Fetch HLS Stream
+        </button>
+
+        <button id="testPopupDashButton" type="button">
+          Fetch DASH Stream
+        </button>
+      </div>
+
+      <p id="popupV03Status" class="hint">
+        v0.3 popup-тест ещё не запускался.
+      </p>
+    </section>
   </main>
 <script>
   const playDynamicHlsButton = document.getElementById("playDynamicHlsButton");
@@ -421,6 +451,92 @@
           "MP3 запрошен. Открой popup расширения и проверь блок «Найденные потоки».";
       } catch (error) {
         popupOnlyStatus.textContent = `Ошибка MP3-запроса: ${error.message}`;
+      }
+    });
+  }
+
+  const testPopupAudioButton = document.getElementById("testPopupAudioButton");
+  const testPopupVideoButton = document.getElementById("testPopupVideoButton");
+  const testPopupHlsButton = document.getElementById("testPopupHlsButton");
+  const testPopupDashButton = document.getElementById("testPopupDashButton");
+  const popupV03Status = document.getElementById("popupV03Status");
+
+  function appendPopupV03Status(text) {
+    popupV03Status.textContent = text;
+  }
+
+  if (testPopupAudioButton && popupV03Status) {
+    testPopupAudioButton.addEventListener("click", async () => {
+      appendPopupV03Status("Запрашиваю Audio...");
+
+      try {
+        await fetch(
+          `https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.mp3?popupV03=audio&bitrate=128&t=${Date.now()}`,
+          {
+            mode: "no-cors",
+            cache: "no-store"
+          }
+        );
+
+        appendPopupV03Status("Audio запрошен. Открой popup и проверь фильтр Audio.");
+      } catch (error) {
+        appendPopupV03Status(`Ошибка Audio-запроса: ${error.message}`);
+      }
+    });
+  }
+
+  if (testPopupVideoButton && popupV03Status) {
+    testPopupVideoButton.addEventListener("click", async () => {
+      appendPopupV03Status("Запрашиваю Video...");
+
+      try {
+        await fetch(
+          `https://samplelib.com/lib/preview/mp4/sample-5s.mp4?popupV03=video&quality=720p&t=${Date.now()}`,
+          {
+            mode: "no-cors",
+            cache: "no-store"
+          }
+        );
+
+        appendPopupV03Status("Video запрошен. Открой popup и проверь фильтр Video.");
+      } catch (error) {
+        appendPopupV03Status(`Ошибка Video-запроса: ${error.message}`);
+      }
+    });
+  }
+
+  if (testPopupHlsButton && popupV03Status) {
+    testPopupHlsButton.addEventListener("click", async () => {
+      appendPopupV03Status("Запрашиваю HLS...");
+
+      try {
+        const response = await fetch(`test_hls/playlist.m3u8?popupV03=hls&quality=720p&t=${Date.now()}`, {
+          cache: "no-store"
+        });
+
+        await response.text();
+
+        appendPopupV03Status("HLS запрошен. Открой popup и проверь фильтр Stream.");
+      } catch (error) {
+        appendPopupV03Status(`Ошибка HLS-запроса: ${error.message}`);
+      }
+    });
+  }
+
+  if (testPopupDashButton && popupV03Status) {
+    testPopupDashButton.addEventListener("click", async () => {
+      appendPopupV03Status("Запрашиваю DASH...");
+
+      try {
+        const response = await fetch(`test_dash/manifest.mpd?popupV03=dash&quality=1080p&t=${Date.now()}`, {
+          cache: "no-store"
+        });
+
+        await response.text();
+
+        appendPopupV03Status("DASH запрошен. Открой popup и проверь фильтр Stream.");
+      } catch (error) {
+        appendPopupV03Status(`Ошибка DASH-запроса: ${error.message}`);
       }
     });
   }

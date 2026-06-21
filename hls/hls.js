@@ -355,14 +355,42 @@ function getPathnameExtension(url) {
   }
 }
 
-function getOutputInfo(segmentUrls, hasInitMap) {
+function isAudioOnlyVariant(variant) {
+  if (!variant) {
+    return false;
+  }
+
+  const codecs = String(variant.codecs || "").toLowerCase();
+  const resolution = String(variant.resolution || "").toLowerCase();
+
+  if (resolution && resolution !== "unknown") {
+    return false;
+  }
+
+  if (!codecs || codecs === "unknown") {
+    return false;
+  }
+
+  const hasAudioCodec = /(mp4a|aac|ac-3|ec-3|opus|vorbis|flac|alac|mp3)/.test(codecs);
+  const hasVideoCodec = /(avc|hev1|hvc1|vp09|vp9|av01|theora|h264|h265)/.test(codecs);
+
+  return hasAudioCodec && !hasVideoCodec;
+}
+
+function getOutputInfo(segmentUrls, hasInitMap, variant = null) {
   const firstSegmentExtension = getPathnameExtension(segmentUrls[0]);
+  const audioOnlyVariant = isAudioOnlyVariant(variant);
 
   if (hasInitMap) {
-    return {
-      extension: ".mp4",
-      mimeType: "video/mp4"
-    };
+    return audioOnlyVariant
+      ? {
+          extension: ".m4a",
+          mimeType: "audio/mp4"
+        }
+      : {
+          extension: ".mp4",
+          mimeType: "video/mp4"
+        };
   }
 
   if (firstSegmentExtension === ".aac") {
@@ -380,10 +408,15 @@ function getOutputInfo(segmentUrls, hasInitMap) {
   }
 
   if (firstSegmentExtension === ".mp4") {
-    return {
-      extension: ".mp4",
-      mimeType: "video/mp4"
-    };
+    return audioOnlyVariant
+      ? {
+          extension: ".m4a",
+          mimeType: "audio/mp4"
+        }
+      : {
+          extension: ".mp4",
+          mimeType: "video/mp4"
+        };
   }
 
   return {
@@ -468,7 +501,7 @@ function prepareMediaPlaylist(playlistUrl, playlistText, variant = null, variant
     throw new Error("В playlist не найдено сегментов.");
   }
 
-  const outputInfo = getOutputInfo(segmentUrls, Boolean(initMapUrl));
+  const outputInfo = getOutputInfo(segmentUrls, Boolean(initMapUrl), variant);
   const outputFilename = replaceFileExtension(initialFilename, outputInfo.extension);
 
   return {

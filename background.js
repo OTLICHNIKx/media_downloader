@@ -392,6 +392,75 @@ function getStreamInfoFromUrl(url) {
   }
 }
 
+function isSoundCloudPlaybackHost(url) {
+  if (!url) return false;
+
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "playback.media-streaming.soundcloud.cloud" || host.endsWith(".soundcloud.com") || host.endsWith(".soundcloud.cloud");
+  } catch {
+    return false;
+  }
+}
+
+function getSoundCloudCaptureHint(url) {
+  if (!url || !isSoundCloudPlaybackHost(url)) {
+    return null;
+  }
+
+  const lower = String(url).toLowerCase();
+
+  if (lower.includes(".m3u8") || lower.includes("/playlist") || lower.includes("/manifest")) {
+    return "manifest";
+  }
+
+  if (lower.includes("/transcodings") || lower.includes("/streams") || lower.includes("/media/soundcloud:tracks:")) {
+    return "api";
+  }
+
+  if (lower.includes(".m4s") || /\/data\d+\.m4s(?:[?#]|$)/.test(lower) || lower.includes("/aac_")) {
+    return "fragment";
+  }
+
+  return null;
+}
+
+function shouldIgnoreCaptureResponseDiagnostic(details, contentType = "") {
+  if (!details || !details.url) {
+    return true;
+  }
+
+  const lowerUrl = String(details.url).toLowerCase();
+  const lowerType = String(contentType || "").toLowerCase();
+  const requestType = String(details.type || "").toLowerCase();
+
+  if (["ping", "csp_report", "font", "image"].includes(requestType)) {
+    return true;
+  }
+
+  if (
+    lowerUrl.includes("analytics") ||
+    lowerUrl.includes("collect?") ||
+    lowerUrl.includes("pixel") ||
+    lowerUrl.includes("telemetry") ||
+    lowerUrl.includes("tsub/") ||
+    lowerUrl.includes("/connect/session")
+  ) {
+    return true;
+  }
+
+  if (
+    lowerType.startsWith("application/json") ||
+    lowerType.startsWith("text/plain") ||
+    lowerType.startsWith("text/html") ||
+    lowerType.startsWith("text/event-stream")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function isManifestLikeStream(streamInfo, url) {
   if (!streamInfo) return false;
 
@@ -674,7 +743,8 @@ function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}) {
     foundAt: now,
     isManifestLike,
     isFragmentLike,
-    captureScore
+    captureScore,
+    siteHint: getSoundCloudCaptureHint(url)
   };
 
   const existingCapturedStream = capturedStreamsByTabId[tabId][activeCapture.captureId] || null;
@@ -727,6 +797,23 @@ function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}) {
         statusCode: meta.statusCode || null
       }
     );
+
+    if (capturedStream.siteHint === "fragment") {
+      rememberDiagnostic(
+        tabId,
+        "soundcloud-fragment-detected-awaiting-manifest",
+        "SoundCloud отдает fragment-сегменты. Для скачивания нужен связанный manifest или playback API URL.",
+        {
+          captureId: activeCapture.captureId,
+          trackTitle: activeCapture.trackTitle || "media",
+          url,
+          contentType: capturedStream.contentType,
+          requestType: meta.requestType || null,
+          statusCode: meta.statusCode || null,
+          host: "soundcloud"
+        }
+      );
+    }
   }
 
   capturedStreamsByTabId[tabId][activeCapture.captureId] = capturedStream;
@@ -787,18 +874,38 @@ chrome.webRequest.onHeadersReceived.addListener(
 
       if (activeCapture) {
         const contentType = getHeaderValue(details.responseHeaders, "content-type");
+        const soundCloudHint = getSoundCloudCaptureHint(details.url);
 
-        rememberDiagnostic(
-          details.tabId,
-          "capture-response-not-media",
-          "Во время capture был сетевой ответ, но Content-Type/URL не похожи на поддерживаемое медиа.",
-          {
-            url: details.url,
-            contentType,
-            requestType: details.type || null,
-            statusCode: details.statusCode || null
-          }
-        );
+        if (soundCloudHint === "manifest" || soundCloudHint === "api") {
+          rememberDiagnostic(
+            details.tabId,
+            soundCloudHint === "manifest"
+              ? "soundcloud-manifest-candidate-detected"
+              : "soundcloud-api-playback-url-detected",
+            soundCloudHint === "manifest"
+              ? "Во время capture замечен SoundCloud manifest-кандидат. Нужна доработка site adapter для его извлечения."
+              : "Во время capture замечен SoundCloud playback/API запрос. Он может содержать путь к manifest.",
+            {
+              url: details.url,
+              contentType,
+              requestType: details.type || null,
+              statusCode: details.statusCode || null,
+              trackTitle: activeCapture.trackTitle || "media"
+            }
+          );
+        } else if (!shouldIgnoreCaptureResponseDiagnostic(details, contentType)) {
+          rememberDiagnostic(
+            details.tabId,
+            "capture-response-not-media",
+            "Во время capture был сетевой ответ, но Content-Type/URL не похожи на поддерживаемое медиа.",
+            {
+              url: details.url,
+              contentType,
+              requestType: details.type || null,
+              statusCode: details.statusCode || null
+            }
+          );
+        }
       }
 
       return;

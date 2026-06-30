@@ -11,6 +11,7 @@ import {
   isEmbedMode,
   setStatus,
   setProgress,
+  setDetails,
   setControlsVisible,
   setDownloadUiState
 } from "./ui-state.js";

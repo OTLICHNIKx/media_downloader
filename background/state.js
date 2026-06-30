@@ -1,0 +1,10 @@
+export const streamsByTabId = {};
+export const activeCapturesByTabId = {};
+export const capturedStreamsByTabId = {};
+export const diagnosticsByTabId = {};
+export const diagnosticSignaturesByTabId = {};
+export const scanSummariesByTabId = {};
+export const soundCloudFragmentGroupsByTabId = {};
+export const soundCloudFallbackPlaylistsById = {};
+export const soundCloudResolvedByTabId = {};
+export const soundCloudResolveInFlightByTabId = {};

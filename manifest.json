@@ -18,7 +18,8 @@
     "default_popup": "popup/popup.html"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "web_accessible_resources": [
   {
@@ -41,7 +42,14 @@
         "<all_urls>"
       ],
       "js": [
-        "content.js"
+        "content/consts.js",
+        "content/url-utils.js",
+        "content/icons.js",
+        "content/tracks.js",
+        "content/adapters.js",
+        "content/scan.js",
+        "content/panels.js",
+        "content/bootstrap.js"
       ],
       "run_at": "document_idle"
     }

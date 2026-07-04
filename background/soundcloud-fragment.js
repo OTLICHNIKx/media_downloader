@@ -3,6 +3,7 @@ import {
   soundCloudFallbackPlaylistsById,
   soundCloudResolvedByTabId,
   soundCloudResolveInFlightByTabId,
+  soundCloudTrackIdByPlaylistUrlByTabId,
   capturedStreamsByTabId
 } from "./state.js";
 
@@ -251,4 +252,5 @@ export function cleanupSoundCloudFallbacksForTab(tabId) {
 
   delete soundCloudResolvedByTabId[tabId];
   delete soundCloudResolveInFlightByTabId[tabId];
+  delete soundCloudTrackIdByPlaylistUrlByTabId[tabId];
 }

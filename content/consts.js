@@ -13,10 +13,25 @@ const MEDIA_DOWNLOADER_URL_ATTRIBUTE = "data-media-downloader-url";
 
 let mediaDownloaderScanTimer = null;
 let mediaDownloaderLastLocation = window.location.href;
+// Timestamp последнего реального выполнения scanAndAddIcons().
+// Нужен для bounded debounce (max-wait cap) в scheduleMediaDownloaderScan,
+// чтобы частые DOM-мутации не откладывали скан бесконечно.
+let mediaDownloaderLastScanRunAt = 0;
 const MEDIA_DOWNLOADER_FALLBACK_ATTRIBUTE = "data-media-downloader-fallback-id";
 let mediaDownloaderUiEnabled = true;
 let mediaDownloaderLastDiagnosticReportAt = 0;
 let mediaDownloaderLastScanSummaryReportAt = 0;
+
+// Персистентная привязка trackId → mediaItem в памяти content-script.
+// SoundCloud — Ember-приложение: ре-рендер/виртуализация списка выбрасывает
+// старый DOM-узел вместе с нашей кнопкой. При следующем скане новая карточка
+// (тот же trackId) сопоставляется с привязкой и кнопка восстанавливается.
+const mediaDownloaderTrackBindings = new Map();
+
+// Привязка captureId → trackId для устойчивости capture к ре-рендеру Ember.
+// Когда background отвечает с captureId, а оригинальный DOM-узел уже выброшен,
+// находим новую карточку по trackId и ставим кнопку на неё.
+const mediaDownloaderCaptureToTrackId = new Map();
 const HLS_PANEL_ID = "media-downloader-hls-panel";
 const DASH_PANEL_ID = "media-downloader-dash-panel";
 

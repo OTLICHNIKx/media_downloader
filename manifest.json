@@ -21,15 +21,24 @@
     "service_worker": "background.js",
     "type": "module"
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "web_accessible_resources": [
-  {
+    {
       "resources": [
         "hls/hls.html",
         "hls/hls.css",
-        "hls/hls.js",
+        "hls/modules/*.js",
         "dash/dash.html",
         "dash/dash.css",
-        "dash/dash.js"
+        "dash/modules/*.js",
+        "shared/*.js",
+        "vendor/ffmpeg/*",
+        "vendor/fflate/*",
+        "playlist-downloader/playlist-downloader.html",
+        "playlist-downloader/playlist-downloader.css",
+        "playlist-downloader/modules/*.js"
       ],
       "matches": [
         "<all_urls>"
@@ -49,7 +58,8 @@
         "content/adapters.js",
         "content/scan.js",
         "content/panels.js",
-        "content/bootstrap.js"
+        "content/bootstrap.js",
+        "content/soundcloud-sets.js"
       ],
       "run_at": "document_idle"
     }

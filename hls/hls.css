@@ -179,6 +179,11 @@ body.embed-mode .details {
   box-sizing: border-box;
 }
 
+.output-mode-label {
+  display: block;
+  margin-top: 12px;
+}
+
 .actions {
   display: flex;
   gap: 8px;

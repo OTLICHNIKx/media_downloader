@@ -43,6 +43,29 @@ export function isSoundCloudPlaybackHost(url) {
   }
 }
 
+// Извлекает SoundCloud track id из API/media URL.
+// Примеры:
+//   https://api-v2.soundcloud.com/media/soundcloud:tracks:123456/stream/hls -> "123456"
+//   .../soundcloud%3Atracks%3A123456/...                                   -> "123456"
+// Для playback.media-streaming... playlist URL id напрямую нет — он резолвится
+// отдельно (см. soundcloud-resolve.js), здесь возвращается null.
+export function getSoundCloudTrackIdFromUrl(url) {
+  if (!url) return null;
+
+  try {
+    const decoded = decodeURIComponent(url);
+    const match = decoded.match(/soundcloud:tracks:(\d+)/i);
+
+    if (match && match[1]) {
+      return match[1];
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function getSoundCloudCaptureHint(url) {
   if (!url || !isSoundCloudPlaybackHost(url)) {
     return null;

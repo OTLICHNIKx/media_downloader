@@ -91,6 +91,42 @@ function buildStreamMediaItem(stream, source = "captured-stream") {
   };
 }
 
+// SoundCloud кладёт track id в ссылку карточки: /tracks/123456.
+// Используется как «ожидаемый» трек для capture, чтобы prefetch соседних
+// треков не привязывался к нажатой карточке.
+function getSoundCloudTrackIdFromTrackElement(trackElement) {
+  if (!trackElement || !(trackElement instanceof Element)) return null;
+
+  const trackLinks = trackElement.querySelectorAll(
+    "a[href*='/tracks/']"
+  );
+
+  for (const link of trackLinks) {
+    const match = (link.getAttribute("href") || "").match(/\/tracks\/(\d+)/);
+
+    if (match && match[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
+// Ищет трек-карточку по SoundCloud trackId среди видимых [data-media-downloader-track].
+function findTrackElementByTrackId(trackId) {
+  if (!trackId) return null;
+
+  const trackElements = document.querySelectorAll("[data-media-downloader-track]");
+
+  for (const element of trackElements) {
+    if (getSoundCloudTrackIdFromTrackElement(element) === trackId) {
+      return element;
+    }
+  }
+
+  return null;
+}
+
 function startStreamCaptureForTrack(trackElement, reason = "interaction") {
   if (!trackElement) return;
 
@@ -105,6 +141,14 @@ function startStreamCaptureForTrack(trackElement, reason = "interaction") {
 
   const captureId = getOrCreateTrackCaptureId(trackElement);
   const trackTitle = getTrackTitle(trackElement);
+  const expectedTrackId = getSoundCloudTrackIdFromTrackElement(trackElement);
+
+  // Запоминаем captureId → trackId, чтобы при ре-рендере Ember
+  // (когда DOM-узел с captureId выброшен) можно было найти новую
+  // карточку по trackId.
+  if (expectedTrackId) {
+    mediaDownloaderCaptureToTrackId.set(captureId, expectedTrackId);
+  }
 
   chrome.runtime.sendMessage(
     {
@@ -112,6 +156,7 @@ function startStreamCaptureForTrack(trackElement, reason = "interaction") {
       captureId,
       trackTitle,
       reason,
+      expectedTrackId,
       timeoutMs: 7000
     },
     (response) => {
@@ -130,6 +175,27 @@ function startStreamCaptureForTrack(trackElement, reason = "interaction") {
       }, 7000);
     }
   );
+}
+
+// Запоминает связь trackId → mediaItem для восстановления кнопки
+// после ре-рендера/виртуализации DOM SoundCloud.
+function rememberTrackBinding(trackElement, mediaItem) {
+  if (!trackElement || !mediaItem) return;
+
+  const trackId = getSoundCloudTrackIdFromTrackElement(trackElement);
+  if (!trackId) return;
+
+  mediaDownloaderTrackBindings.set(trackId, mediaItem);
+}
+
+// Возвращает сохранённый mediaItem по trackId карточки.
+function getBoundMediaItemForTrackElement(trackElement) {
+  if (!trackElement) return null;
+
+  const trackId = getSoundCloudTrackIdFromTrackElement(trackElement);
+  if (!trackId) return null;
+
+  return mediaDownloaderTrackBindings.get(trackId) || null;
 }
 
 function addIconOnTrackElement(trackElement, mediaItem) {
@@ -171,6 +237,8 @@ function addIconOnTrackElement(trackElement, mediaItem) {
   trackElement.setAttribute(TRACK_BOUND_ATTRIBUTE, "true");
   trackElement.setAttribute(TRACK_STREAM_URL_ATTRIBUTE, mediaItem.url);
   trackElement.setAttribute(TRACK_STREAM_TYPE_ATTRIBUTE, mediaItem.streamType || mediaItem.extension);
+
+  rememberTrackBinding(trackElement, mediaItem);
 }
 
 function cleanMetadataText(text) {
@@ -237,4 +305,23 @@ function enrichMediaItemWithTrackMetadata(mediaItem, trackElement) {
     trackTitle: cleanMetadataText(trackElement.getAttribute(TRACK_TITLE_ATTRIBUTE) || ""),
     trackAuthor: cleanMetadataText(trackElement.getAttribute(TRACK_AUTHOR_ATTRIBUTE) || "")
   };
+}
+
+// Восстанавливает кнопки скачивания на трек-карточках, которые потеряли их
+// из-за ре-рендера/виртуализации SoundCloud. Вызывается после каждого скана.
+function restoreTrackButtonsIfMissing() {
+  if (mediaDownloaderTrackBindings.size === 0) return;
+
+  document.querySelectorAll("[data-media-downloader-track]").forEach((trackElement) => {
+    // Пропускаем карточки с уже существующей кнопкой
+    const existingIcon = trackElement.querySelector(
+      `:scope > .${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
+    );
+    if (existingIcon) return;
+
+    const boundItem = getBoundMediaItemForTrackElement(trackElement);
+    if (!boundItem) return;
+
+    addIconOnTrackElement(trackElement, boundItem);
+  });
 }

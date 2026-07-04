@@ -1,5 +1,5 @@
 import { activeCapturesByTabId, capturedStreamsByTabId } from "./state.js";
-import { isSoundCloudPlaybackHlsEndpoint, getSoundCloudCaptureHint } from "./soundcloud-helpers.js";
+import { isSoundCloudPlaybackHlsEndpoint, getSoundCloudCaptureHint, getSoundCloudTrackIdFromUrl } from "./soundcloud-helpers.js";
 import { isManifestLikeStream, isFragmentLikeUrl, getCaptureCandidateScore, shouldReplaceCapturedStream } from "./url-classify.js";
 import { rememberDiagnostic } from "./diagnostics.js";
 import {
@@ -7,7 +7,31 @@ import {
   attachSoundCloudFallbackToCapturedStream,
   resendCapturedStreamWithFallbackIfNeeded
 } from "./soundcloud-fragment.js";
-import { resolveSoundCloudPlaylistUrl } from "./soundcloud-resolve.js";
+import { resolveSoundCloudPlaylistUrl, getSoundCloudTrackIdByPlaylistUrl } from "./soundcloud-resolve.js";
+
+// Определяет track id потока для текущей вкладки.
+// — API/media URL содержит id напрямую (soundcloud:tracks:NNN).
+// — playback playlist URL резолвится через обратный индекс (см. soundcloud-resolve.js).
+// Возвращает null, если id неизвестен (например, резолв ещё не прошёл).
+function getStreamTrackIdForTab(tabId, url) {
+  const directId = getSoundCloudTrackIdFromUrl(url);
+  if (directId) return directId;
+
+  return getSoundCloudTrackIdByPlaylistUrl(tabId, url);
+}
+
+// True, если поток принадлежит другому треку, чем ожидает capture.
+// Если expectedTrackId не задан (не SoundCloud или id не извлечён) — пропускаем.
+// Если id потока ещё неизвестен (резолв не дошёл) — НЕ отсекаем, чтобы не
+// потерять валидный playback-URL; его перепривяжут позже при резолве.
+function isStreamForDifferentTrack(tabId, url, expectedTrackId) {
+  if (!expectedTrackId) return false;
+
+  const streamTrackId = getStreamTrackIdForTab(tabId, url);
+  if (!streamTrackId) return false;
+
+  return streamTrackId !== expectedTrackId;
+}
 
 export function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}) {
   if (tabId < 0 || !url || !streamInfo || !streamInfo.type) return;
@@ -33,6 +57,29 @@ export function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}
     );
 
     delete activeCapturesByTabId[tabId];
+    return;
+  }
+
+  // SoundCloud: отбрасываем prefetch соседних треков. Если у capture есть
+  // ожидаемый track id, а у потока — другой, игнорируем его целиком.
+  // Дедупликация диагностики идёт по сигнатуре (URL включён в неё),
+  // поэтому на поток одного URL сработает один раз.
+  if (isStreamForDifferentTrack(tabId, url, activeCapture.expectedTrackId)) {
+    rememberDiagnostic(
+      tabId,
+      "capture-rejected-different-track",
+      "Во время capture замечен поток другого трека (prefetch). Он проигнорирован.",
+      {
+        captureId: activeCapture.captureId,
+        trackTitle: activeCapture.trackTitle || "media",
+        expectedTrackId: activeCapture.expectedTrackId || null,
+        url,
+        contentType: streamInfo.contentType || meta.contentType || null,
+        requestType: meta.requestType || null,
+        statusCode: meta.statusCode || null
+      }
+    );
+
     return;
   }
 

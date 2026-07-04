@@ -6,6 +6,19 @@ function closeHlsDownloaderPanel() {
   }
 }
 
+// Определяет «сайт-источник» по текущему домену. Используется панелью
+// HLS, чтобы применить дефолты под конкретный сайт (например, авто-MP3
+// и автостарт на SoundCloud). null — сайт без специальных дефолтов.
+function getSiteNameForDownloader() {
+  const host = window.location.hostname.toLowerCase();
+
+  if (host.includes("soundcloud.com")) {
+    return "soundcloud";
+  }
+
+  return null;
+}
+
 function openHlsDownloaderPanel(mediaItem) {
   if (!mediaItem || !mediaItem.url) return;
 
@@ -16,11 +29,15 @@ function openHlsDownloaderPanel(mediaItem) {
     ? `&fallbackPlaylistId=${encodeURIComponent(mediaItem.soundCloudFallbackPlaylistId)}`
     : "";
 
+  const site = getSiteNameForDownloader();
+  const siteParam = site ? `&site=${encodeURIComponent(site)}` : "";
+
   const panelUrl =
     chrome.runtime.getURL("hls/hls.html") +
     `?url=${encodeURIComponent(mediaItem.url)}` +
     `&filename=${encodeURIComponent(mediaItem.filename || "media.m3u8")}` +
     fallbackParam +
+    siteParam +
     `&embed=1`;
 
   const iframe = document.createElement("iframe");

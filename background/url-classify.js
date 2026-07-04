@@ -414,5 +414,10 @@ export function shouldReplaceCapturedStream(existingStream, nextStream) {
     return nextIsManifest;
   }
 
-  return Number(nextStream.foundAt || 0) >= Number(existingStream.foundAt || 0);
+  // Равные score и типы (оба manifest / оба fragment).
+  // Раньше: более поздний поток вытеснял первый (>=). Это позволяло prefetch
+  // соседнего трека перебиндить карточку. Теперь удерживаем уже привязанный
+  // поток — замена только при строгом преимуществе по foundAt невозможна,
+  // поэтому сохраняем существующий.
+  return false;
 }

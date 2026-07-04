@@ -1,12 +1,18 @@
 import { fetchArrayBuffer } from "../../shared/http.js";
 import { formatBandwidth } from "../../shared/format.js";
 import {
+  canTranscodeToMp3,
+  ensureMp3TranscoderLoaded,
+  transcodeAudioBlobToMp3
+} from "../../shared/transcode.js";
+import {
   downloaderState,
   variantSelectElement,
   setStatus,
   setDetails,
   setProgress,
-  setDownloadUiState
+  setDownloadUiState,
+  setOutputModeAvailable
 } from "./ui-state.js";
 import { fetchHlsPlaylistResource } from "./hls-fallback.js";
 import { buildPlaylistSourceDetails, buildFallbackDetails } from "./hls-fallback.js";
@@ -27,6 +33,10 @@ function formatBytes(bytes) {
 
   const precision = unitIndex === 0 ? 0 : 1;
   return `${value.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function updateOutputModeAvailability(prepared = downloaderState.preparedDownload) {
+  setOutputModeAvailable(canTranscodeToMp3(prepared?.outputInfo));
 }
 
 export function buildVariantLabel(variant, index) {
@@ -120,6 +130,7 @@ export async function prepareSelectedVariant() {
   }
 
   downloaderState.preparedDownload = null;
+  updateOutputModeAvailability(null);
   setDownloadUiState(false);
   setStatus("Загружаю выбранный media playlist...");
   setProgress(8);
@@ -134,13 +145,16 @@ export async function prepareSelectedVariant() {
       selectedIndex
     );
 
+    updateOutputModeAvailability(downloaderState.preparedDownload);
+
     setDetails(
       buildPlaylistSourceDetails(playlistResource) +
       buildFallbackDetails(playlistResource) +
       buildPreparedDetails(downloaderState.preparedDownload)
     );
 
-    setStatus("Готово к скачиванию. Выбери качество и нажми «Скачать выбранное».");
+    setStatus("Готово к скачиванию. Выбери качество и нажми «Скачать выбранное»."
+    );
     setProgress(0);
     setDownloadUiState(false);
   } catch (error) {
@@ -148,6 +162,7 @@ export async function prepareSelectedVariant() {
     setStatus(`Ошибка: ${error.message}`);
     setDetails("");
     setProgress(0);
+    updateOutputModeAvailability(null);
   }
 }
 
@@ -169,7 +184,7 @@ async function downloadBlob(blob, filename) {
       filename,
       saveAs: true
     },
-    (downloadId) => {
+    () => {
       if (chrome.runtime.lastError) {
         setStatus(`Ошибка сохранения: ${chrome.runtime.lastError.message}`);
         URL.revokeObjectURL(objectUrl);
@@ -184,6 +199,93 @@ async function downloadBlob(blob, filename) {
       }, 60_000);
     }
   );
+}
+
+async function finalizeOutput(blob, prepared) {
+  const originalFilename = prepared.outputFilename;
+
+  if (downloaderState.outputMode !== "mp3") {
+    await downloadBlob(blob, originalFilename);
+    return;
+  }
+
+  if (!canTranscodeToMp3(prepared.outputInfo)) {
+    throw new Error("MP3-конвертация доступна только для audio-only HLS результата.");
+  }
+
+  setStatus("Загружаю MP3 transcoder...");
+  setProgress(96);
+
+  await ensureMp3TranscoderLoaded({
+    onLog(message) {
+      if (!message) return;
+      if (message.startsWith("size=") || message.includes("time=")) {
+        setStatus("Конвертирую в MP3...");
+      }
+    }
+  });
+
+  setStatus("Конвертирую в MP3...");
+  setProgress(98);
+
+  const transcoded = await transcodeAudioBlobToMp3(blob, originalFilename, {
+    inputExtension: prepared.outputInfo.extension,
+    onLog(message) {
+      if (!message) return;
+      if (message.startsWith("size=") || message.includes("time=")) {
+        setStatus("Конвертирую в MP3...");
+      }
+    }
+  });
+
+  setDetails(
+    `${buildPreparedDetails(prepared, {
+      downloadedSegments: prepared.segmentUrls.length,
+      downloadedBytes: blob.size
+    })}\n\nКонвертировано в MP3: ${transcoded.filename}`
+  );
+
+  await downloadBlob(transcoded.blob, transcoded.filename);
+}
+
+// Размер пула одновременных загрузок сегментов.
+// 6 — баланс: браузер держит ~6 соединений на хост, бóльшая степень
+// параллелизма упрётся в лимит и не даст выигрышка.
+const SEGMENT_DOWNLOAD_CONCURRENCY = 6;
+
+// Параллельная загрузка сегментов с сохранением порядка по индексу.
+// Запускает до concurrency одновременных fetch; результат складывается
+// в results[index], чтобы склейка шла строго в исходном порядке, а не
+// в порядке завершения. Любая ошибка — отмена остальных через abortController.
+async function downloadSegmentsInParallel(segmentUrls, abortController, onSegmentDone) {
+  const results = new Array(segmentUrls.length).fill(null);
+  let nextQueueIndex = 0;
+
+  async function runWorker() {
+    while (true) {
+      const index = nextQueueIndex;
+      nextQueueIndex += 1;
+
+      if (index >= segmentUrls.length) return;
+
+      const buffer = await fetchArrayBuffer(segmentUrls[index], {
+        signal: abortController.signal,
+        label: `сегмент ${index + 1}`
+      });
+
+      results[index] = buffer;
+      onSegmentDone(index, buffer);
+    }
+  }
+
+  const workerCount = Math.min(
+    SEGMENT_DOWNLOAD_CONCURRENCY,
+    segmentUrls.length
+  );
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+
+  return results;
 }
 
 export async function startPreparedDownload() {
@@ -214,21 +316,29 @@ export async function startPreparedDownload() {
       renderDownloadProgress(prepared, downloadedSegments, downloadedBytes);
     }
 
-    for (let index = 0; index < prepared.segmentUrls.length; index += 1) {
-      const segmentUrl = prepared.segmentUrls[index];
+    setStatus(
+      `Загружаю сегменты (до ${Math.min(
+        SEGMENT_DOWNLOAD_CONCURRENCY,
+        prepared.segmentUrls.length
+      )} параллельно)...`
+    );
 
-      setStatus(`Загружаю сегмент ${index + 1} из ${prepared.segmentUrls.length}...`);
-      setProgress(10 + ((index + 1) / prepared.segmentUrls.length) * 80);
+    const segmentBuffers = await downloadSegmentsInParallel(
+      prepared.segmentUrls,
+      abortController,
+      (index, buffer) => {
+        downloadedSegments += 1;
+        downloadedBytes += buffer.byteLength;
+        setStatus(
+          `Загружено сегментов: ${downloadedSegments} из ${prepared.segmentUrls.length}`
+        );
+        setProgress(10 + (downloadedSegments / prepared.segmentUrls.length) * 80);
+        renderDownloadProgress(prepared, downloadedSegments, downloadedBytes);
+      }
+    );
 
-      const buffer = await fetchArrayBuffer(segmentUrl, {
-        signal: abortController.signal,
-        label: `сегмент ${index + 1}`
-      });
-
+    for (const buffer of segmentBuffers) {
       buffers.push(buffer);
-      downloadedSegments += 1;
-      downloadedBytes += buffer.byteLength;
-      renderDownloadProgress(prepared, downloadedSegments, downloadedBytes);
     }
 
     setStatus("Собираю файл...");
@@ -245,7 +355,7 @@ export async function startPreparedDownload() {
       })}\n\nИтоговый размер: ${formatBytes(blob.size)}`
     );
 
-    await downloadBlob(blob, prepared.outputFilename);
+    await finalizeOutput(blob, prepared);
   } catch (error) {
     if (error.name === "AbortError") {
       setStatus("Скачивание отменено.");
@@ -254,7 +364,8 @@ export async function startPreparedDownload() {
     }
 
     console.error("[HLS Downloader]", error);
-    setStatus(`Ошибка: ${error.message}`);
+    const errorMessage = error?.message || String(error) || "Неизвестная ошибка";
+    setStatus(`Ошибка: ${errorMessage}`);
   } finally {
     downloaderState.currentDownloadAbortController = null;
     setDownloadUiState(false);

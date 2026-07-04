@@ -1,7 +1,19 @@
-import { soundCloudResolvedByTabId, soundCloudResolveInFlightByTabId, capturedStreamsByTabId } from "./state.js";
+import { soundCloudResolvedByTabId, soundCloudResolveInFlightByTabId, soundCloudTrackIdByPlaylistUrlByTabId, capturedStreamsByTabId } from "./state.js";
 import { mergePlusSeparatedValues } from "./url-classify.js";
 import { extractHlsPlaylistUrlFromJsonText } from "../shared/hls-json.js";
+import { getSoundCloudTrackIdFromUrl } from "./soundcloud-helpers.js";
 import { rememberDiagnostic } from "./diagnostics.js";
+
+// Обратный lookup: playlistUrl -> trackId для вкладки.
+// Возвращает null, если связь ещё не установлена (резолв не прошёл).
+export function getSoundCloudTrackIdByPlaylistUrl(tabId, playlistUrl) {
+  if (!playlistUrl) return null;
+
+  const index = soundCloudTrackIdByPlaylistUrlByTabId[tabId];
+  if (!index) return null;
+
+  return index[playlistUrl] || null;
+}
 
 // Распаковывает реальный playlist URL из SoundCloud playback-API endpoint
 // в момент capture (токен самый свежий), кэширует и перевязывает карточку.
@@ -78,6 +90,16 @@ export async function resolveSoundCloudPlaylistUrl(tabId, apiUrl, activeCapture)
     captureId: activeCapture.captureId,
     trackTitle: activeCapture.trackTitle || "media"
   };
+
+  // Запоминаем связь playback playlist URL -> track id для последующего
+  // матчинга в capture (URL вида .../UUID/playlist.m3u8 не содержит id).
+  const resolvedTrackId = getSoundCloudTrackIdFromUrl(apiUrl);
+  if (resolvedTrackId) {
+    if (!soundCloudTrackIdByPlaylistUrlByTabId[tabId]) {
+      soundCloudTrackIdByPlaylistUrlByTabId[tabId] = {};
+    }
+    soundCloudTrackIdByPlaylistUrlByTabId[tabId][playlistUrl] = resolvedTrackId;
+  }
 
   resendCapturedStreamWithResolvedPlaylist(tabId, activeCapture, playlistUrl);
 }

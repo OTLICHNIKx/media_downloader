@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Скачивание плейлиста — Media Downloader</title>
+    <link rel="stylesheet" href="playlist-downloader.css" />
+  </head>
+  <body>
+    <div class="page">
+      <div class="card">
+        <div class="topbar">
+          <div>
+            <h1 id="title">Плейлист</h1>
+            <p class="description" id="description">Подготовка...</p>
+          </div>
+        </div>
+
+        <div id="overall-progress-block" class="progress-block">
+          <div class="progress-label">
+            <span id="overall-status">Запуск...</span>
+            <span id="overall-counter">0 / 0</span>
+          </div>
+          <div class="progress-bar">
+            <div id="overall-bar" class="progress-bar-fill"></div>
+          </div>
+        </div>
+
+        <div id="controls" class="controls hidden">
+          <button id="cancel-button" type="button" class="btn btn-secondary">
+            Отменить
+          </button>
+          <button id="download-zip-button" type="button" class="btn btn-primary hidden">
+            Скачать ZIP
+          </button>
+        </div>
+
+        <ul id="track-list" class="track-list"></ul>
+      </div>
+    </div>
+
+    <script type="module" src="modules/index.js"></script>
+  </body>
+</html>

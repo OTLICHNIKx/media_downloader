@@ -41,11 +41,24 @@ function openStreamTool(stream) {
   const filename = getStreamFilename(stream);
 
   if (stream.type === "hls") {
+    const params = new URLSearchParams({
+      url: stream.url,
+      filename
+    });
+
+    const isSoundCloudAudioHls =
+      String(stream.url || "").includes("soundcloud") &&
+      (String(stream.extension || "").toLowerCase() === "m3u8" ||
+        String(stream.qualityLabel || "").toLowerCase().includes("kbps") ||
+        String(stream.contentType || "").toLowerCase().includes("audio/"));
+
+    if (isSoundCloudAudioHls) {
+      params.set("outputMode", "mp3");
+      params.set("site", "soundcloud");
+    }
+
     chrome.tabs.create({
-      url:
-        chrome.runtime.getURL("hls/hls.html") +
-        `?url=${encodeURIComponent(stream.url)}` +
-        `&filename=${encodeURIComponent(filename)}`
+      url: `${chrome.runtime.getURL("hls/hls.html")}?${params.toString()}`
     });
 
     return;

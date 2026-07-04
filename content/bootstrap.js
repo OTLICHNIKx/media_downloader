@@ -67,7 +67,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return element.getAttribute(TRACK_CAPTURE_ATTRIBUTE) === captureId;
     });
 
-    if (!trackElement) {
+    // Fallback: Ember может ре-рендернуть карточку до того, как background
+    // ответил. Оригинальный DOM-узел с captureId выброшен — ищем новую
+    // карточку по trackId из персистентной привязки captureId → trackId.
+    const resolvedTrackElement = trackElement || (() => {
+      const savedTrackId = mediaDownloaderCaptureToTrackId.get(captureId);
+      if (!savedTrackId) return null;
+      return findTrackElementByTrackId(savedTrackId);
+    })();
+
+    if (!resolvedTrackElement) {
       sendResponse({
         ok: false,
         error: "Track element not found for captureId"
@@ -83,8 +92,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         "captured-audio-fragment-not-full-file",
         "Пойманный поток похож на fragment/segment и не будет показан как прямое скачивание.",
         {
-          adapter: trackElement.getAttribute(TRACK_ADAPTER_ATTRIBUTE) || null,
-          trackTitle: getTrackTitle(trackElement),
+          adapter: resolvedTrackElement.getAttribute(TRACK_ADAPTER_ATTRIBUTE) || null,
+          trackTitle: getTrackTitle(resolvedTrackElement),
           url: stream?.url || null,
           contentType: stream?.contentType || null,
           isFragmentLike: Boolean(stream?.isFragmentLike),
@@ -103,9 +112,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    const enrichedMediaItem = enrichMediaItemWithTrackMetadata(mediaItem, trackElement);
+    const enrichedMediaItem = enrichMediaItemWithTrackMetadata(mediaItem, resolvedTrackElement);
 
-    addIconOnTrackElement(trackElement, enrichedMediaItem);
+    addIconOnTrackElement(resolvedTrackElement, enrichedMediaItem);
 
     sendResponse({
       ok: true
@@ -141,7 +150,21 @@ window.addEventListener("message", (event) => {
 
 loadMediaDownloaderUiState();
 
+// Оповещаем background, что content-script перезагружен.
+// При F5 tabId остаётся тем же, но все per-tab state в background
+// (capture, streams, resolved URL) устарел — очистим.
+chrome.runtime.sendMessage({ type: "CONTENT_SCRIPT_READY" }, () => {
+  if (chrome.runtime.lastError) {
+    // background может быть временно недоступен — игнорируем
+  }
+});
+
 installSpaNavigationHooks();
+
+// Стартовая точка отсчёта max-wait: считаем, что «скан» только что
+// завершился, чтобы первый запланированный скан шёл со своей нормальной
+// задержкой, а не форсировался по cap.
+mediaDownloaderLastScanRunAt = Date.now();
 
 scheduleMediaDownloaderScan(100);
 scheduleMediaDownloaderScan(800);

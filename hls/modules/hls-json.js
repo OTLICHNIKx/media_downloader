@@ -1,11 +1,11 @@
 // Дедупликация: JSON-unwrap берётся из shared/hls-json.js
 // (background уже использует тот же модуль — задание C/D).
-export {
+import {
   resolveHlsUrl as resolveUrl,
   extractHlsPlaylistUrlFromJsonText
 } from "../../shared/hls-json.js";
 
-import { resolveUrl, extractHlsPlaylistUrlFromJsonText } from "../../shared/hls-json.js";
+export { resolveUrl, extractHlsPlaylistUrlFromJsonText };
 
 export function isLikelyHlsPlaylistText(text) {
   const cleanText = String(text || "").trim();
@@ -28,5 +28,3 @@ export function extractHlsPlaylistUrlFromJsonResource(firstText, baseUrl) {
 
   return resolvedPlaylistUrl;
 }
-
-export { resolveUrl };

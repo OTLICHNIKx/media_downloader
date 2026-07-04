@@ -307,6 +307,10 @@ function scanAndAddIcons() {
 
   stats.buttonsOnPage = document.querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}`).length;
 
+  // Восстанавливаем кнопки на трек-карточках, которые потеряли их
+  // из-за ре-рендера/виртуализации Ember (SoundCloud).
+  restoreTrackButtonsIfMissing();
+
   reportScanDiagnostics(stats, adapter);
 
   const totalDirectFound = stats.inlineLinkMediaFound + stats.inlineMediaFound;
@@ -319,16 +323,36 @@ function scanAndAddIcons() {
   );
 }
 
+// Bounded debounce (trailing) с max-wait cap.
+// Сайты вроде SoundCloud генерируют очень частые DOM-мутации. Обычный debounce
+// (clearTimeout + новый таймер) откладывал бы скан бесконечно, пока мутации
+// не стихнут — кнопки не появлялись. Здесь вводим max-wait: как только с
+// последнего реального скана прошло больше MAX_SCAN_WAIT_MS, запускаем скан
+// принудительно, не дожидаясь тишины в DOM.
+const MAX_SCAN_WAIT_MS = 1500;
+
+function runScanSafely() {
+  try {
+    scanAndAddIcons();
+  } catch (error) {
+    console.warn("[Media Downloader] scan failed:", error);
+  } finally {
+    mediaDownloaderLastScanRunAt = Date.now();
+  }
+}
+
 function scheduleMediaDownloaderScan(delay = 250) {
+  // Если с последнего скана прошло больше max-wait, форсируем запуск скоро
+  // (минимальная задержка, чтобы дать текущей мутации осесть), но не ждём
+  // полного delay — иначе при непрерывных мутациях скан бы не запускался.
+  const sinceLastScan = Date.now() - mediaDownloaderLastScanRunAt;
+  const effectiveDelay = sinceLastScan >= MAX_SCAN_WAIT_MS
+    ? Math.min(delay, 50)
+    : delay;
+
   clearTimeout(mediaDownloaderScanTimer);
 
-  mediaDownloaderScanTimer = setTimeout(() => {
-    try {
-      scanAndAddIcons();
-    } catch (error) {
-      console.warn("[Media Downloader] scan failed:", error);
-    }
-  }, delay);
+  mediaDownloaderScanTimer = setTimeout(runScanSafely, effectiveDelay);
 }
 
 function handlePossibleSpaNavigation() {
@@ -345,6 +369,15 @@ function handlePossibleSpaNavigation() {
   document.querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}`).forEach((element) => {
     element.remove();
   });
+
+  // Очищаем персистентные привязки треков — на новой странице
+  // они уже неактуальны.
+  mediaDownloaderTrackBindings.clear();
+  mediaDownloaderCaptureToTrackId.clear();
+
+  // Сбрасываем точку отсчёта max-wait под новую страницу, чтобы первый
+  // скан после навигации шёл со своей задержкой, а не форсировался.
+  mediaDownloaderLastScanRunAt = Date.now();
 
   scheduleMediaDownloaderScan(400);
   scheduleMediaDownloaderScan(1200);

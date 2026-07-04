@@ -36,10 +36,17 @@ function buildTrackFilename(index, track) {
 // Запрос к SoundCloud API через background service worker.
 // Background добавляет client_id к API URL и имеет доступ к cookies.
 // Возвращает { playlistUrl, playlistText } либо бросает.
-function resolveTrackHlsViaBackground(trackId, clientId) {
+function resolveTrackHlsViaBackground(track, clientId) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(
-      { type: "RESOLVE_TRACK_HLS", trackId, clientId },
+      {
+        type: "RESOLVE_TRACK_HLS",
+        trackId: track.trackId,
+        trackUrn: track.trackUrn,
+        apiUrl: track.hlsUrl,
+        trackAuthorization: track.trackAuthorization,
+        clientId
+      },
       (response) => {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
@@ -101,7 +108,7 @@ async function downloadTrack(track, index, clientId, abortController, callbacks)
   callbacks.onStage(index, "playlist", "Загрузка плейлиста");
 
   // 1. Запрос к SoundCloud API через background (cookies + client_id).
-  const resource = await resolveTrackHlsViaBackground(track.trackId, clientId);
+  const resource = await resolveTrackHlsViaBackground(track, clientId);
 
   // 2. Парсинг сегментов.
   const prepared = prepareMediaPlaylist(

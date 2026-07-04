@@ -19,6 +19,48 @@ const batchId = params.get("batchId");
 
 const abortController = new AbortController();
 
+function getChromeStorageLocal(key) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(key, (result) => {
+      const error = chrome.runtime.lastError;
+
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+
+      resolve(result || {});
+    });
+  });
+}
+
+function removeChromeStorageLocal(key) {
+  return new Promise((resolve) => {
+    chrome.storage.local.remove(key, () => {
+      resolve();
+    });
+  });
+}
+
+async function getStoredPlaylistBatch(batchId) {
+  const storageKey = `playlistBatch:${batchId}`;
+  const result = await getChromeStorageLocal(storageKey);
+  const batch = result[storageKey];
+
+  if (!batch || !Array.isArray(batch.tracks)) {
+    return null;
+  }
+
+  await removeChromeStorageLocal(storageKey);
+
+  return {
+    ok: true,
+    tracks: batch.tracks,
+    playlistTitle: batch.playlistTitle || "playlist",
+    clientId: batch.clientId || null
+  };
+}
+
 let completedCount = 0;
 let failedCount = 0;
 let totalTracks = 0;
@@ -191,14 +233,24 @@ async function init() {
       batchId
     },
     async (response) => {
-      if (chrome.runtime.lastError || !response || !response.ok) {
+      let resolvedResponse = response;
+
+    if (chrome.runtime.lastError || !response || !response.ok) {
+      try {
+        resolvedResponse = await getStoredPlaylistBatch(batchId);
+      } catch (error) {
+        resolvedResponse = null;
+      }
+
+      if (!resolvedResponse || !resolvedResponse.ok) {
         setOverallStatus(
-          `Ошибка: ${response?.error || "не удалось получить батч"}`
+          `Ошибка: ${response?.error || chrome.runtime.lastError?.message || "не удалось получить батч"}`
         );
         return;
       }
+    }
 
-      const { tracks, playlistTitle, clientId } = response;
+    const { tracks, playlistTitle, clientId } = resolvedResponse;
 
       totalTracks = tracks.length;
       titleElement.textContent = playlistTitle;

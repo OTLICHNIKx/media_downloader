@@ -14,8 +14,10 @@ function sanitizeSetsFilename(filename) {
 const SETS_BUTTON_ID = "media-downloader-sets-button";
 const SETS_BUTTON_CLASS = "media-downloader-sets-button";
 const SETS_STYLES_ID = "media-downloader-sets-styles";
+const SETS_MAX_SCAN_WAIT_MS = 1500;
 let setsScanTimer = null;
 let setsLastLocation = window.location.href;
+let setsLastScanRunAt = 0;
 
 // Инжектирует стили плавающей кнопки (один раз).
 // Скрывается через .media-downloader-ui-disabled, как и инлайн-иконки.
@@ -95,6 +97,110 @@ function getTrackIdFromHref(href) {
   return match && match[1] ? match[1] : null;
 }
 
+function getTrackIdFromApiTrack(track) {
+  if (!track) return null;
+
+  if (typeof track.id === "number" || typeof track.id === "string") {
+    return String(track.id);
+  }
+
+  const urn = track.urn || track.track_urn || "";
+  const match = String(urn).match(/soundcloud:tracks:(\d+)/i);
+
+  return match && match[1] ? match[1] : null;
+}
+
+function getTrackUrnFromApiTrack(track) {
+  if (!track) return null;
+
+  const urn = track.urn || track.track_urn || "";
+  if (urn) return String(urn);
+
+  const trackId = getTrackIdFromApiTrack(track);
+  return trackId ? `soundcloud:tracks:${trackId}` : null;
+}
+
+function findStringValueByKeyDeep(value, keyMatchers, depth = 0, seen = new Set()) {
+  if (!value || typeof value !== "object" || depth > 6 || seen.has(value)) {
+    return "";
+  }
+
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findStringValueByKeyDeep(item, keyMatchers, depth + 1, seen);
+      if (found) return found;
+    }
+
+    return "";
+  }
+
+  for (const [key, item] of Object.entries(value)) {
+    if (
+      keyMatchers.some((matcher) => matcher.test(key)) &&
+      (typeof item === "string" || typeof item === "number") &&
+      String(item)
+    ) {
+      return String(item);
+    }
+
+    const nested = findStringValueByKeyDeep(item, keyMatchers, depth + 1, seen);
+    if (nested) return nested;
+  }
+
+  return "";
+}
+
+function getTrackAuthorizationFromApiTrack(track) {
+  return findStringValueByKeyDeep(track, [/^track_authorization$/i, /^trackAuthorization$/i]);
+}
+
+function getPermalinkUrlFromApiTrack(track) {
+  return String(track?.permalink_url || track?.permalinkUrl || "");
+}
+
+function getBestHlsTranscodingUrl(track) {
+  const transcodings = track?.media?.transcodings;
+  if (!Array.isArray(transcodings)) return "";
+
+  const hlsTranscodings = transcodings.filter((transcoding) => {
+    return (
+      transcoding?.url &&
+      String(transcoding?.format?.protocol || "").toLowerCase() === "hls"
+    );
+  });
+
+  const preferred =
+    hlsTranscodings.find((transcoding) => {
+      return String(transcoding?.format?.mime_type || "").toLowerCase().includes("audio/aac");
+    }) ||
+    hlsTranscodings.find((transcoding) => {
+      return String(transcoding?.format?.mime_type || "").toLowerCase().includes("audio/mpeg");
+    }) ||
+    hlsTranscodings[0];
+
+  return preferred?.url || "";
+}
+
+function normalizePlaylistTrack(track) {
+  const title = cleanSetsText(track?.title || "");
+  const trackId = getTrackIdFromApiTrack(track);
+  const trackUrn = getTrackUrnFromApiTrack(track);
+
+  if (!title || (!trackId && !trackUrn)) return null;
+
+    return {
+    trackId: trackId || trackUrn,
+    trackUrn,
+    title,
+    author: cleanSetsText(track?.user?.username || ""),
+    permalinkUrl: getPermalinkUrlFromApiTrack(track),
+    hlsUrl: getBestHlsTranscodingUrl(track),
+    trackAuthorization: getTrackAuthorizationFromApiTrack(track)
+  };
+}
+
 // Извлекает плейлист-данные из SoundCloud hydration JSON.
 // SoundCloud встраивает на странице <script>window.__sc_hydration = [...]</script>
 // с информацией о плейлисте и (обрезанным) списком треков.
@@ -118,20 +224,14 @@ function extractPlaylistFromHydration() {
       for (const item of hydration) {
         const resource = item?.hydratable === "playlist" ? item?.data : null;
 
-        if (!resource || typeof resource.id !== "number") continue;
+        if (!resource || (!resource.id && !resource.urn)) continue;
 
         const tracks = Array.isArray(resource.tracks)
-          ? resource.tracks
-              .filter((t) => t && typeof t.id === "number" && t.title)
-              .map((t) => ({
-                trackId: String(t.id),
-                title: cleanSetsText(t.title),
-                author: cleanSetsText(t.user?.username || "")
-              }))
+          ? resource.tracks.map(normalizePlaylistTrack).filter(Boolean)
           : [];
 
         return {
-          playlistId: String(resource.id),
+          playlistId: String(resource.urn || resource.id),
           tracks
         };
       }
@@ -141,6 +241,102 @@ function extractPlaylistFromHydration() {
   }
 
   return null;
+}
+
+async function fetchSoundCloudJson(url) {
+  const response = await fetch(url, { credentials: "include" });
+
+  if (!response.ok) {
+    throw new Error(`SoundCloud API HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function mergeTrackMetadata(baseTrack, detailedTrack) {
+  if (!detailedTrack) return baseTrack;
+
+  return {
+    ...baseTrack,
+    trackId: baseTrack.trackId || detailedTrack.trackId,
+    trackUrn: baseTrack.trackUrn || detailedTrack.trackUrn,
+    title: baseTrack.title || detailedTrack.title,
+    author: baseTrack.author || detailedTrack.author,
+    permalinkUrl: baseTrack.permalinkUrl || detailedTrack.permalinkUrl,
+    hlsUrl: baseTrack.hlsUrl || detailedTrack.hlsUrl,
+    trackAuthorization: baseTrack.trackAuthorization || detailedTrack.trackAuthorization
+  };
+}
+
+async function enrichPlaylistTrack(track, clientId) {
+  if (!track || !clientId) return track;
+
+  if (track.hlsUrl && track.trackAuthorization) return track;
+
+  const candidates = [];
+  const numericTrackId = getTrackIdFromApiTrack(track);
+
+  if (numericTrackId) {
+    candidates.push(
+      `https://api-v2.soundcloud.com/tracks/${encodeURIComponent(numericTrackId)}` +
+        `?client_id=${encodeURIComponent(clientId)}`
+    );
+  }
+
+  if (track.permalinkUrl) {
+    candidates.push(
+      `https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(track.permalinkUrl)}` +
+        `&client_id=${encodeURIComponent(clientId)}`
+    );
+  }
+
+  for (const url of candidates) {
+    try {
+      const data = await fetchSoundCloudJson(url);
+      const detailedTrack = normalizePlaylistTrack(data);
+      const mergedTrack = mergeTrackMetadata(track, detailedTrack);
+
+      if (mergedTrack.hlsUrl && mergedTrack.trackAuthorization) {
+        return mergedTrack;
+      }
+
+      return mergedTrack;
+    } catch (error) {
+      console.warn(
+        "[Media Downloader] Sets: track detail fetch failed:",
+        error?.message || error
+      );
+    }
+  }
+
+  return track;
+}
+
+async function enrichPlaylistTracks(tracks, clientId) {
+  const result = [];
+  const concurrency = 3;
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (nextIndex < tracks.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      result[index] = await enrichPlaylistTrack(tracks[index], clientId);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, tracks.length) }, () => runWorker())
+  );
+
+  const hlsCount = result.filter((track) => track?.hlsUrl).length;
+  const authCount = result.filter((track) => track?.trackAuthorization).length;
+
+  console.log(
+    `[Media Downloader] Sets: HLS URL ${hlsCount}/${result.length}, track_authorization ${authCount}/${result.length}`
+  );
+
+  return result;
 }
 
 // Получает полный список треков плейлиста через SoundCloud API.
@@ -153,8 +349,8 @@ async function fetchFullPlaylistTracks(playlistId) {
     if (!clientId) return null;
 
     const url =
-      `https://api-v2.soundcloud.com/playlists/${playlistId}` +
-      `?client_id=${encodeURIComponent(clientId)}&representation=compact`;
+      `https://api-v2.soundcloud.com/playlists/${encodeURIComponent(playlistId)}` +
+      `?client_id=${encodeURIComponent(clientId)}&representation=full`;
 
     const response = await fetch(url, { credentials: "include" });
 
@@ -169,13 +365,9 @@ async function fetchFullPlaylistTracks(playlistId) {
 
     if (!data || !Array.isArray(data.tracks)) return null;
 
-    return data.tracks
-      .filter((t) => t && typeof t.id === "number" && t.title)
-      .map((t) => ({
-        trackId: String(t.id),
-        title: cleanSetsText(t.title),
-        author: cleanSetsText(t.user?.username || "")
-      }));
+    const tracks = data.tracks.map(normalizePlaylistTrack).filter(Boolean);
+
+    return enrichPlaylistTracks(tracks, clientId);
   } catch {
     return null;
   }
@@ -393,6 +585,56 @@ function extractPlaylistTitle() {
   return segments[segments.length - 1] || "playlist";
 }
 
+function setChromeStorageLocal(values) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set(values, () => {
+      const error = chrome.runtime.lastError;
+
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+function openPlaylistDownloaderUrl(url) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      {
+        type: "OPEN_PLAYLIST_DOWNLOADER",
+        url
+      },
+      (response) => {
+        const runtimeError = chrome.runtime.lastError;
+
+        if (runtimeError || !response || !response.ok) {
+          console.warn(
+            "[Media Downloader] Sets: background не открыл загрузчик:",
+            runtimeError?.message || response?.error || "unknown error"
+          );
+
+          const openedWindow = window.open(url, "_blank", "noopener");
+
+          if (openedWindow) {
+            resolve({ ok: true, fallback: "window.open" });
+            return;
+          }
+
+          // Если popup заблокирован — открываем загрузчик в текущей вкладке.
+          window.location.href = url;
+          resolve({ ok: true, fallback: "current-tab" });
+          return;
+        }
+
+        resolve({ ok: true, fallback: null });
+      }
+    );
+  });
+}
+
 function createSetsButton(trackCount) {
   const button = document.getElementById(SETS_BUTTON_ID);
 
@@ -416,7 +658,7 @@ function createSetsButton(trackCount) {
       const tracks = await collectVisiblePlaylistTracks();
       const playlistTitle = extractPlaylistTitle();
       const clientId = getClientId();
- 
+
       if (!clientId) {
         newButton.disabled = false;
         newButton.textContent = "client_id не найден";
@@ -438,25 +680,30 @@ function createSetsButton(trackCount) {
 
       newButton.textContent = `Открываю загрузчик (${tracks.length})...`;
 
-      chrome.runtime.sendMessage(
-        {
-          type: "START_PLAYLIST_BATCH_DOWNLOAD",
+      const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const storageKey = `playlistBatch:${batchId}`;
+
+      await setChromeStorageLocal({
+        [storageKey]: {
           tracks,
           playlistTitle,
-          clientId
-        },
-        (response) => {
-          if (chrome.runtime.lastError || !response || !response.ok) {
-            newButton.disabled = false;
-            newButton.textContent = `Скачать плейлист (${tracks.length})`;
-            return;
-          }
-
-          // Вкладка playlist-downloader открыта background'ом —
-          // кнопку можно скрыть.
-          newButton.textContent = "Загрузчик открыт в новой вкладке ✓";
+          clientId,
+          createdAt: Date.now()
         }
+      });
+
+      console.log("[Media Downloader] Sets: batch сохранён в storage", {
+        batchId,
+        tracks: tracks.length
+      });
+
+      const downloaderUrl = chrome.runtime.getURL(
+        `playlist-downloader/playlist-downloader.html?batchId=${encodeURIComponent(batchId)}`
       );
+
+      await openPlaylistDownloaderUrl(downloaderUrl);
+
+      newButton.textContent = "Загрузчик открыт ✓";
     } catch (error) {
       newButton.disabled = false;
       newButton.textContent = "Ошибка сбора треков";
@@ -510,10 +757,27 @@ function refreshSetsButton() {
   removeSetsButton();
 }
 
-// Debounce-скан: SoundCloud активно мутирует DOM (Ember).
+function runSetsScanSafely() {
+  try {
+    refreshSetsButton();
+  } catch (error) {
+    console.warn("[Media Downloader] Sets: scan failed:", error);
+  } finally {
+    setsLastScanRunAt = Date.now();
+  }
+}
+
+// Bounded debounce: SoundCloud/Ember может мутировать DOM непрерывно.
+// Обычный clearTimeout+setTimeout способен откладывать кнопку бесконечно,
+// поэтому раз в SETS_MAX_SCAN_WAIT_MS принудительно запускаем scan.
 function scheduleSetsScan(delay = 400) {
+  const sinceLastScan = Date.now() - setsLastScanRunAt;
+  const effectiveDelay = sinceLastScan >= SETS_MAX_SCAN_WAIT_MS
+    ? Math.min(delay, 50)
+    : delay;
+
   clearTimeout(setsScanTimer);
-  setsScanTimer = setTimeout(refreshSetsButton, delay);
+  setsScanTimer = setTimeout(runSetsScanSafely, effectiveDelay);
 }
 
 // Слежение за SPA-навигацией: кнопка должна жить только на /sets/.
@@ -521,13 +785,13 @@ function handleSetsSpaNavigation() {
   if (setsLastLocation === window.location.href) return;
 
   setsLastLocation = window.location.href;
-  refreshSetsButton();
+  runSetsScanSafely();
 }
 
 // Стартовая инициализация + наблюдатели.
 function initSoundCloudSetsButton() {
   injectSetsStyles();
-  refreshSetsButton();
+  runSetsScanSafely();
 
   // MutationObserver — реагируем на ре-рендер карточек Ember'ом.
   const observer = new MutationObserver(() => {

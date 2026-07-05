@@ -160,6 +160,82 @@ function getPermalinkUrlFromApiTrack(track) {
   return String(track?.permalink_url || track?.permalinkUrl || "");
 }
 
+function isSnippedSoundCloudTranscoding(transcoding) {
+  const markerText = [
+    transcoding?.preset,
+    transcoding?.quality,
+    transcoding?.url,
+    transcoding?.format?.mime_type,
+    transcoding?.format?.protocol
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    transcoding?.snipped === true ||
+    markerText.includes("preview") ||
+    markerText.includes("snippet") ||
+    markerText.includes("snipped")
+  );
+}
+
+function getTrackDurationMsFromApiTrack(track) {
+  return Number(
+    track?.duration ||
+      track?.full_duration ||
+      track?.fullDuration ||
+      track?.publisher_metadata?.duration ||
+      0
+  ) || 0;
+}
+
+function scoreSoundCloudHlsTranscoding(transcoding, trackDurationMs) {
+  const mime = String(transcoding?.format?.mime_type || "").toLowerCase();
+  const preset = String(transcoding?.preset || "").toLowerCase();
+  const duration = Number(transcoding?.duration || 0) || 0;
+
+  let score = 0;
+
+  if (!isSnippedSoundCloudTranscoding(transcoding)) score += 1000;
+  if (mime.includes("audio/aac")) score += 200;
+  if (preset.includes("aac_160k")) score += 120;
+  if (mime.includes("audio/mpeg")) score += 80;
+
+  if (trackDurationMs && duration) {
+    const ratio = duration / trackDurationMs;
+
+    if (ratio >= 0.9 && ratio <= 1.1) score += 300;
+    else if (ratio >= 0.6) score += 100;
+    else if (ratio < 0.4) score -= 500;
+  }
+
+  return score;
+}
+
+function getSoundCloudPolicy(track) {
+  return String(track?.policy || "").toUpperCase();
+}
+
+function getTrackAvailabilityReason(track) {
+  const policy = getSoundCloudPolicy(track);
+  const streamable = track?.streamable;
+
+  if (policy === "BLOCK") {
+    return "Трек недоступен в текущем регионе";
+  }
+
+  if (policy === "SNIP") {
+    return "Трек доступен только как 30-секундный preview";
+  }
+
+  if (streamable === false) {
+    return "Трек недоступен для стриминга";
+  }
+
+  return "";
+}
+
 function getBestHlsTranscodingUrl(track) {
   const transcodings = track?.media?.transcodings;
   if (!Array.isArray(transcodings)) return "";
@@ -167,20 +243,23 @@ function getBestHlsTranscodingUrl(track) {
   const hlsTranscodings = transcodings.filter((transcoding) => {
     return (
       transcoding?.url &&
-      String(transcoding?.format?.protocol || "").toLowerCase() === "hls"
+      String(transcoding?.format?.protocol || "").toLowerCase() === "hls" &&
+      !isSnippedSoundCloudTranscoding(transcoding)
     );
   });
 
-  const preferred =
-    hlsTranscodings.find((transcoding) => {
-      return String(transcoding?.format?.mime_type || "").toLowerCase().includes("audio/aac");
-    }) ||
-    hlsTranscodings.find((transcoding) => {
-      return String(transcoding?.format?.mime_type || "").toLowerCase().includes("audio/mpeg");
-    }) ||
-    hlsTranscodings[0];
+  if (hlsTranscodings.length === 0) return "";
 
-  return preferred?.url || "";
+  const trackDurationMs = getTrackDurationMsFromApiTrack(track);
+
+  const sorted = [...hlsTranscodings].sort((a, b) => {
+    return (
+      scoreSoundCloudHlsTranscoding(b, trackDurationMs) -
+      scoreSoundCloudHlsTranscoding(a, trackDurationMs)
+    );
+  });
+
+  return sorted[0]?.url || "";
 }
 
 function normalizePlaylistTrack(track) {
@@ -194,10 +273,12 @@ function normalizePlaylistTrack(track) {
     trackId: trackId || trackUrn,
     trackUrn,
     title,
-    author: cleanSetsText(track?.user?.username || ""),
+    author: cleanAuthorName(track?.user?.username || ""),
     permalinkUrl: getPermalinkUrlFromApiTrack(track),
     hlsUrl: getBestHlsTranscodingUrl(track),
-    trackAuthorization: getTrackAuthorizationFromApiTrack(track)
+    trackAuthorization: getTrackAuthorizationFromApiTrack(track),
+    availabilityReason: getTrackAvailabilityReason(track),
+    durationMs: getTrackDurationMsFromApiTrack(track)
   };
 }
 
@@ -231,7 +312,10 @@ function extractPlaylistFromHydration() {
           : [];
 
         return {
-          playlistId: String(resource.urn || resource.id),
+          playlistId: String(resource.id || resource.urn),
+          playlistUrn: resource.urn ? String(resource.urn) : "",
+          trackCount: Number(resource.track_count || resource.trackCount || tracks.length) || tracks.length,
+          permalinkUrl: String(resource.permalink_url || resource.permalinkUrl || ""),
           tracks
         };
       }
@@ -253,6 +337,76 @@ async function fetchSoundCloudJson(url) {
   return response.json();
 }
 
+function appendSoundCloudUrlParams(url, params) {
+  const parsedUrl = new URL(url, window.location.href);
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (!value || parsedUrl.searchParams.has(key)) return;
+    parsedUrl.searchParams.set(key, value);
+  });
+
+  return parsedUrl.href;
+}
+
+function getSoundCloudCollectionItems(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.collection)) return data.collection;
+  if (Array.isArray(data?.tracks)) return data.tracks;
+
+  return [];
+}
+
+function normalizePlaylistTrackFromCollectionItem(item) {
+  return normalizePlaylistTrack(item?.track || item);
+}
+
+function getPlaylistTrackDedupKey(track) {
+  return String(track?.trackUrn || track?.trackId || track?.permalinkUrl || "");
+}
+
+function dedupePlaylistTracks(tracks) {
+  const seen = new Set();
+  const result = [];
+
+  for (const track of tracks) {
+    const key = getPlaylistTrackDedupKey(track);
+    if (!key || seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(track);
+  }
+
+  return result;
+}
+
+async function fetchAllSoundCloudCollection(firstUrl, clientId, maxPages = 20) {
+  const items = [];
+  const seenUrls = new Set();
+  let nextUrl = firstUrl;
+  let page = 0;
+
+  while (nextUrl && page < maxPages && !seenUrls.has(nextUrl)) {
+    page += 1;
+    seenUrls.add(nextUrl);
+
+    const data = await fetchSoundCloudJson(nextUrl);
+    items.push(...getSoundCloudCollectionItems(data));
+
+    const rawNextUrl = data?.next_href || data?.nextHref || "";
+
+    nextUrl = rawNextUrl
+      ? appendSoundCloudUrlParams(rawNextUrl, {
+          client_id: clientId,
+          limit: "200",
+          linked_partitioning: "1",
+          representation: "full"
+        })
+      : "";
+  }
+
+  return items;
+}
+
 function mergeTrackMetadata(baseTrack, detailedTrack) {
   if (!detailedTrack) return baseTrack;
 
@@ -264,7 +418,9 @@ function mergeTrackMetadata(baseTrack, detailedTrack) {
     author: baseTrack.author || detailedTrack.author,
     permalinkUrl: baseTrack.permalinkUrl || detailedTrack.permalinkUrl,
     hlsUrl: baseTrack.hlsUrl || detailedTrack.hlsUrl,
-    trackAuthorization: baseTrack.trackAuthorization || detailedTrack.trackAuthorization
+    trackAuthorization: baseTrack.trackAuthorization || detailedTrack.trackAuthorization,
+    durationMs: baseTrack.durationMs || detailedTrack.durationMs,
+    availabilityReason: baseTrack.availabilityReason || detailedTrack.availabilityReason,
   };
 }
 
@@ -343,32 +499,479 @@ async function enrichPlaylistTracks(tracks, clientId) {
 // Запрос идёт со страницы (origin: soundcloud.com) — cookies и referer
 // подхватываются автоматически. client_id извлекается из страницы.
 // Возвращает массив { trackId, title, author } или null при ошибке.
-async function fetchFullPlaylistTracks(playlistId) {
+function getNumericPlaylistId(value) {
+  if (value === null || value === undefined) return "";
+
+  const text = String(value);
+
+  if (/^\d+$/.test(text)) {
+    return text;
+  }
+
+  const match = text.match(/soundcloud:playlists:(\d+)/i);
+  return match && match[1] ? match[1] : "";
+}
+
+function encodeSoundCloudRefForPath(value) {
+  return encodeURIComponent(String(value)).replace(/%3A/gi, ":");
+}
+
+function getPlaylistApiRefs(playlistInfoOrId) {
+  const playlistId =
+    typeof playlistInfoOrId === "object"
+      ? playlistInfoOrId?.playlistId
+      : playlistInfoOrId;
+
+  const playlistUrn =
+    typeof playlistInfoOrId === "object"
+      ? playlistInfoOrId?.playlistUrn
+      : "";
+
+  const numericPlaylistId = getNumericPlaylistId(playlistId || playlistUrn);
+
+  const refs = [
+    playlistUrn,
+    numericPlaylistId ? `soundcloud:playlists:${numericPlaylistId}` : "",
+    numericPlaylistId,
+    playlistId
+  ].filter(Boolean);
+
+  return [...new Set(refs.map(String))];
+}
+
+function getPlaylistTrackCount(data) {
+  return Number(data?.track_count || data?.trackCount || 0) || 0;
+}
+
+async function fetchPlaylistObject(playlistRef, clientId, representation) {
+  const playlistUrl =
+    `https://api-v2.soundcloud.com/playlists/${encodeSoundCloudRefForPath(playlistRef)}` +
+    `?client_id=${encodeURIComponent(clientId)}` +
+    `&representation=${encodeURIComponent(representation)}`;
+
+  return fetchSoundCloudJson(playlistUrl);
+}
+
+async function fetchPlaylistObjectTracks(playlistRef, clientId, representation) {
+  const data = await fetchPlaylistObject(playlistRef, clientId, representation);
+
+  const tracks = Array.isArray(data?.tracks)
+    ? data.tracks.map(normalizePlaylistTrack).filter(Boolean)
+    : [];
+
+  const trackCount = getPlaylistTrackCount(data);
+
+  console.log(
+    `[Media Downloader] Sets: /playlists ${playlistRef} representation=${representation} дал ${tracks.length} трек(ов), track_count=${trackCount || "?"}`
+  );
+
+  return {
+    tracks,
+    trackCount
+  };
+}
+
+async function fetchPlaylistTracksEndpoint(playlistRef, clientId) {
+  const firstUrl =
+    `https://api-v2.soundcloud.com/playlists/${encodeSoundCloudRefForPath(playlistRef)}/tracks` +
+    `?client_id=${encodeURIComponent(clientId)}` +
+    `&limit=200` +
+    `&linked_partitioning=true` +
+    `&representation=compact` +
+    `&app_locale=en`;
+
+  console.log(
+    `[Media Downloader] Sets: пробую /playlists/${playlistRef}/tracks`
+  );
+
+  const rawTrackItems = await fetchAllSoundCloudCollection(firstUrl, clientId);
+
+  return dedupePlaylistTracks(
+    rawTrackItems
+      .map(normalizePlaylistTrackFromCollectionItem)
+      .filter(Boolean)
+  );
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isSoundCloudTrackPermalinkUrl(url) {
+  try {
+    const parsedUrl = new URL(url, window.location.href);
+
+    if (parsedUrl.hostname !== "soundcloud.com") {
+      return false;
+    }
+
+    const parts = parsedUrl.pathname
+      .split("/")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (parts.length !== 2) {
+      return false;
+    }
+
+    const [userSlug, trackSlug] = parts;
+
+    if (!userSlug || !trackSlug) {
+      return false;
+    }
+
+    const blockedFirstParts = new Set([
+      "discover",
+      "search",
+      "you",
+      "messages",
+      "notifications",
+      "settings",
+      "upload",
+      "pages",
+      "terms-of-use",
+      "privacy"
+    ]);
+
+    if (blockedFirstParts.has(userSlug)) {
+      return false;
+    }
+
+    if (trackSlug === "sets" || trackSlug === "likes" || trackSlug === "reposts") {
+      return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeSoundCloudPermalinkUrl(url) {
+  const parsedUrl = new URL(url, window.location.href);
+  parsedUrl.hash = "";
+  parsedUrl.search = "";
+
+  return parsedUrl.href;
+}
+
+function collectDomPlaylistTrackPermalinks() {
+  // ВАЖНО:
+  // Не используем широкие селекторы вроде "article a[href]" или ".soundList__item a[href]".
+  // Они цепляют related tracks, заголовок плейлиста и другие ссылки со страницы.
+  const trackContainers = document.querySelectorAll(
+    [
+      ".trackList .trackItem",
+      ".systemPlaylistTrackList .trackItem",
+      ".playlist__tracks .trackItem",
+      ".listenDetails__trackList .trackItem",
+      ".soundList .trackItem"
+    ].join(",")
+  );
+
+  const byUrl = new Map();
+
+  trackContainers.forEach((container) => {
+    const link =
+      container.querySelector(".trackItem__trackTitle[href]") ||
+      container.querySelector(".trackItem__trackTitle a[href]") ||
+      container.querySelector(".soundTitle__title[href]") ||
+      container.querySelector(".soundTitle__title a[href]");
+
+    if (!link) {
+      return;
+    }
+
+    const href = link.getAttribute("href") || "";
+    const absoluteUrl = normalizeSoundCloudPermalinkUrl(href);
+
+    if (!isSoundCloudTrackPermalinkUrl(absoluteUrl)) {
+      return;
+    }
+
+    const title =
+      extractTrackTitle(container, link) ||
+      cleanSetsText(link.textContent || "");
+
+    const author = extractTrackAuthor(container) || "";
+
+    if (!title) {
+      return;
+    }
+
+    if (!byUrl.has(absoluteUrl)) {
+      byUrl.set(absoluteUrl, {
+        trackId: "",
+        trackUrn: "",
+        title,
+        author,
+        permalinkUrl: absoluteUrl,
+        hlsUrl: "",
+        trackAuthorization: ""
+      });
+    }
+  });
+
+  return Array.from(byUrl.values());
+}
+
+async function collectAllDomPlaylistTracks(expectedTrackCount) {
+  const startY = window.scrollY;
+  const collected = new Map();
+  let previousCount = 0;
+  let stableRounds = 0;
+
+  for (let round = 0; round < 35; round++) {
+    for (const track of collectDomPlaylistTrackPermalinks()) {
+      if (!track.permalinkUrl) continue;
+      collected.set(track.permalinkUrl, track);
+    }
+
+    const currentCount = collected.size;
+
+    if (expectedTrackCount && currentCount >= expectedTrackCount) {
+      break;
+    }
+
+    if (currentCount === previousCount) {
+      stableRounds += 1;
+    } else {
+      stableRounds = 0;
+      previousCount = currentCount;
+    }
+
+    if (stableRounds >= 5 && currentCount > 0) {
+      break;
+    }
+
+    window.scrollBy(0, Math.max(window.innerHeight * 0.9, 700));
+    await sleep(650);
+  }
+
+  // Возвращаем пользователя ближе к началу, чтобы страница не оставалась внизу.
+  window.scrollTo({ top: startY, behavior: "instant" });
+
+  let tracks = Array.from(collected.values());
+
+    if (expectedTrackCount && tracks.length > expectedTrackCount) {
+      console.warn(
+        `[Media Downloader] Sets: DOM-scroll собрал лишние ссылки ${tracks.length}/${expectedTrackCount}, обрезаю до ${expectedTrackCount}`
+      );
+
+    tracks = tracks.slice(0, expectedTrackCount);
+  }
+
+  console.log(
+    `[Media Downloader] Sets: DOM-scroll собрал ${tracks.length}/${expectedTrackCount || "?"} permalink(ов)`
+  );
+
+  return tracks;
+}
+
+function isPlayableResolvedTrack(track) {
+  return Boolean(
+    track &&
+      track.title &&
+      (track.trackId || track.trackUrn || track.hlsUrl)
+  );
+}
+
+async function resolveTrackFromPermalinkTrack(track, clientId) {
+  if (!track?.permalinkUrl || !clientId) {
+    return null;
+  }
+
+  try {
+    const url =
+      `https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(track.permalinkUrl)}` +
+      `&client_id=${encodeURIComponent(clientId)}`;
+
+    const data = await fetchSoundCloudJson(url);
+
+    // Если resolve вернул playlist/user/etc., а не track — выкидываем.
+    if (data?.kind && data.kind !== "track") {
+      console.warn(
+        "[Media Downloader] Sets: DOM permalink не является track:",
+        track.permalinkUrl,
+        data.kind
+      );
+
+      return null;
+    }
+
+    const resolvedTrack = normalizePlaylistTrack(data);
+
+    if (!isPlayableResolvedTrack(resolvedTrack)) {
+      console.warn(
+        "[Media Downloader] Sets: DOM permalink не дал playable track:",
+        track.permalinkUrl
+      );
+
+      return null;
+    }
+
+    const mergedTrack = mergeTrackMetadata(track, resolvedTrack);
+
+    return isPlayableResolvedTrack(mergedTrack) ? mergedTrack : null;
+  } catch (error) {
+    console.error(
+      "[Media Downloader] Sets: resolve DOM permalink failed:",
+      track.permalinkUrl,
+      error?.message || error
+    );
+
+    return null;
+  }
+}
+
+async function resolveDomPlaylistTracks(domTracks, clientId, expectedTrackCount = 0) {
+  const result = [];
+  const concurrency = 3;
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (nextIndex < domTracks.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+
+      result[index] = await resolveTrackFromPermalinkTrack(
+        domTracks[index],
+        clientId
+      );
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, domTracks.length) }, () =>
+      runWorker()
+    )
+  );
+
+  let tracks = dedupePlaylistTracks(
+    result.filter(isPlayableResolvedTrack)
+  );
+
+  if (expectedTrackCount && tracks.length > expectedTrackCount) {
+    console.warn(
+      `[Media Downloader] Sets: DOM-resolve дал лишние треки ${tracks.length}/${expectedTrackCount}, обрезаю`
+    );
+
+    tracks = tracks.slice(0, expectedTrackCount);
+  }
+
+  return tracks;
+}
+
+async function fetchFullPlaylistTracks(playlistInfoOrId) {
   try {
     const clientId = getClientId();
     if (!clientId) return null;
 
-    const url =
-      `https://api-v2.soundcloud.com/playlists/${encodeURIComponent(playlistId)}` +
-      `?client_id=${encodeURIComponent(clientId)}&representation=full`;
+    const playlistRefs = getPlaylistApiRefs(playlistInfoOrId);
 
-    const response = await fetch(url, { credentials: "include" });
+    console.log("[Media Downloader] Sets: playlist refs", playlistRefs);
 
-    if (!response.ok) {
-      console.warn(
-        `[Media Downloader] Sets: API /playlists HTTP ${response.status}`
-      );
+    if (playlistRefs.length === 0) {
       return null;
     }
 
-    const data = await response.json();
+    let compactTracks = [];
+    let expectedTrackCount =
+      typeof playlistInfoOrId === "object"
+        ? Number(playlistInfoOrId?.trackCount || 0)
+        : 0;
 
-    if (!data || !Array.isArray(data.tracks)) return null;
+    // 1. Сначала берём playlist object только ради track_count и первых tracks.
+    // ВАЖНО: если tracks меньше track_count — НЕ возвращаем сразу.
+    for (const playlistRef of playlistRefs) {
+      try {
+        const compactResult = await fetchPlaylistObjectTracks(
+          playlistRef,
+          clientId,
+          "compact"
+        );
 
-    const tracks = data.tracks.map(normalizePlaylistTrack).filter(Boolean);
+        if (compactResult.tracks.length > compactTracks.length) {
+          compactTracks = compactResult.tracks;
+        }
 
-    return enrichPlaylistTracks(tracks, clientId);
-  } catch {
+        if (compactResult.trackCount > expectedTrackCount) {
+          expectedTrackCount = compactResult.trackCount;
+        }
+
+        if (expectedTrackCount > 0) {
+          break;
+        }
+      } catch (error) {
+        console.warn(
+          `[Media Downloader] Sets: compact failed for ${playlistRef}:`,
+          error?.message || error
+        );
+      }
+    }
+
+    // 2. Если playlist object дал 5/16 — обязательно пробуем /tracks endpoint.
+    for (const playlistRef of playlistRefs) {
+      try {
+        const tracks = await fetchPlaylistTracksEndpoint(playlistRef, clientId);
+
+        console.log(
+          `[Media Downloader] Sets: /playlists/${playlistRef}/tracks дал ${tracks.length} трек(ов), expected=${expectedTrackCount || "?"}`
+        );
+
+        if (
+          tracks.length > compactTracks.length ||
+          (expectedTrackCount && tracks.length >= expectedTrackCount)
+        ) {
+          return enrichPlaylistTracks(tracks, clientId);
+        }
+      } catch (error) {
+        console.error(
+          `[Media Downloader] Sets: /playlists/${playlistRef}/tracks failed:`,
+          error?.message || error
+        );
+      }
+    }
+
+    // 3. пробуем собрать все permalink'и из DOM через автоскролл.
+    if (expectedTrackCount && compactTracks.length < expectedTrackCount) {
+      const domTracks = await collectAllDomPlaylistTracks(expectedTrackCount);
+
+      if (domTracks.length > compactTracks.length) {
+        const resolvedDomTracks = await resolveDomPlaylistTracks(
+          domTracks,
+          clientId,
+          expectedTrackCount
+        );
+        console.log(
+          `[Media Downloader] Sets: DOM-resolve дал ${resolvedDomTracks.length}/${expectedTrackCount} трек(ов)`
+        );
+
+        if (resolvedDomTracks.length > compactTracks.length) {
+          return enrichPlaylistTracks(resolvedDomTracks, clientId);
+        }
+      }
+    }
+
+    // 4. Только теперь fallback на compact.
+    if (compactTracks.length > 0) {
+      console.warn(
+        `[Media Downloader] Sets: полный список не найден, беру compact fallback ${compactTracks.length}/${expectedTrackCount || "?"}`
+      );
+
+      return enrichPlaylistTracks(
+        dedupePlaylistTracks(compactTracks),
+        clientId
+      );
+    }
+
+    return null;
+  } catch (error) {
+    console.warn(
+      "[Media Downloader] Sets: API playlist fetch failed:",
+      error?.message || error
+    );
+
     return null;
   }
 }
@@ -445,6 +1048,17 @@ function cleanSetsText(text) {
     .trim();
 }
 
+function cleanAuthorName(text) {
+  if (!text) return "";
+
+  return cleanSetsText(text)
+    .replace(/\bVerified\b/gi, "")
+    .replace(/\bOfficial\b/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/^[·•\-–—\s]+|[·•\-–—\s]+$/g, "")
+    .trim();
+}
+
 // Пытается достать заголовок трека из карточки.
 function extractTrackTitle(cardElement, trackLink) {
   // Сначала явные селекторы SoundCloud внутри карточки.
@@ -477,7 +1091,7 @@ function extractTrackAuthor(cardElement) {
     cardElement.querySelector(".trackItem__username");
 
   if (authorEl && authorEl.textContent) {
-    const text = cleanSetsText(authorEl.textContent);
+    const text = cleanAuthorName(authorEl.textContent);
 
     if (text) return text;
   }
@@ -514,13 +1128,21 @@ async function collectVisiblePlaylistTracks() {
 
   // 2. Пробуем получить полный список через API (нужен playlistId + client_id).
   if (playlistInfo && playlistInfo.playlistId) {
-    const apiTracks = await fetchFullPlaylistTracks(playlistInfo.playlistId);
+    const apiTracks = await fetchFullPlaylistTracks(playlistInfo);
 
     if (apiTracks && apiTracks.length > 0) {
+      const playableApiTracks = apiTracks.filter(isPlayableResolvedTrack);
+      if (playableApiTracks.length !== apiTracks.length) {
+        console.warn(
+          `[Media Downloader] Sets: отфильтровано непригодных треков ${apiTracks.length - playableApiTracks.length}/${apiTracks.length}`
+        );
+      }
+
       console.log(
-        `[Media Downloader] Sets: API дал ${apiTracks.length} трек(ов)`
+        `[Media Downloader] Sets: API дал ${playableApiTracks.length} трек(ов)`
       );
-      return apiTracks;
+
+      return playableApiTracks;
     }
   }
 
@@ -583,6 +1205,26 @@ function extractPlaylistTitle() {
   const segments = window.location.pathname.split("/").filter(Boolean);
 
   return segments[segments.length - 1] || "playlist";
+}
+
+function extractPlaylistAuthor() {
+  const authorEl =
+    document.querySelector(".soundTitle__username") ||
+    document.querySelector(".soundTitle__usernameText") ||
+    document.querySelector(".userBadge__username") ||
+    document.querySelector("a.soundTitle__username") ||
+    document.querySelector("a[href^='/'][href]:not([href*='/sets/'])");
+
+  if (authorEl && authorEl.textContent) {
+    const text = cleanAuthorName(authorEl.textContent);
+
+    if (text) return text;
+  }
+
+  // Fallback: первый сегмент URL SoundCloud обычно является artist/user slug.
+  const segments = window.location.pathname.split("/").filter(Boolean);
+
+  return segments[0] || "";
 }
 
 function setChromeStorageLocal(values) {
@@ -657,6 +1299,7 @@ function createSetsButton(trackCount) {
     try {
       const tracks = await collectVisiblePlaylistTracks();
       const playlistTitle = extractPlaylistTitle();
+      const playlistAuthor = extractPlaylistAuthor();
       const clientId = getClientId();
 
       if (!clientId) {
@@ -683,18 +1326,29 @@ function createSetsButton(trackCount) {
       const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const storageKey = `playlistBatch:${batchId}`;
 
+      const batchTracks = tracks.map((track) => ({
+        trackId: track.trackId || "",
+        trackUrn: track.trackUrn || "",
+        title: track.title || "",
+        author: track.author || "",
+        permalinkUrl: track.permalinkUrl || "",
+        durationMs: track.durationMs || 0,
+        availabilityReason: track.availabilityReason || ""
+      }));
+
       await setChromeStorageLocal({
         [storageKey]: {
-          tracks,
+          tracks: batchTracks,
           playlistTitle,
+          playlistAuthor,
           clientId,
           createdAt: Date.now()
         }
       });
 
-      console.log("[Media Downloader] Sets: batch сохранён в storage", {
+      console.log("[Media Downloader] Sets: batch сохранён в storage fresh-only", {
         batchId,
-        tracks: tracks.length
+        tracks: batchTracks.length
       });
 
       const downloaderUrl = chrome.runtime.getURL(
@@ -737,9 +1391,9 @@ function refreshSetsButton() {
   // Быстрый синхронный подсчёт для отображения на кнопке.
   // priority: hydration > DOM links count
   const playlistInfo = extractPlaylistFromHydration();
-  const hydrationCount = playlistInfo && playlistInfo.tracks.length > 0
-    ? playlistInfo.tracks.length
-    : 0;
+  const hydrationCount = playlistInfo
+      ? Number(playlistInfo.trackCount || playlistInfo.tracks.length || 0)
+      : 0;
 
   if (hydrationCount > 0) {
     createSetsButton(hydrationCount);

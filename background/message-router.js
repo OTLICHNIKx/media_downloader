@@ -29,6 +29,24 @@ function appendQueryParams(url, params) {
   return parsedUrl.href;
 }
 
+function appendSoundCloudApiQueryParams(url, params) {
+  const parsedUrl = new URL(url);
+  const hostname = parsedUrl.hostname.toLowerCase();
+
+  // ВАЖНО:
+  // query-параметры добавляем только к SoundCloud API.
+  // К playback.media-streaming.soundcloud.cloud / cf-media.sndcdn.com
+  // ничего не добавляем, иначе signed URL может сломаться и дать HTTP 403.
+  if (
+    hostname !== "api-v2.soundcloud.com" &&
+    hostname !== "api.soundcloud.com"
+  ) {
+    return parsedUrl.href;
+  }
+
+  return appendQueryParams(parsedUrl.href, params);
+}
+
 function getNumericSoundCloudTrackId(...values) {
   for (const value of values) {
     if (value === null || value === undefined) continue;
@@ -46,6 +64,10 @@ function getNumericSoundCloudTrackId(...values) {
   }
 
   return null;
+}
+
+function encodeSoundCloudTrackRefForPath(trackRef) {
+  return encodeURIComponent(String(trackRef)).replace(/%3A/gi, ":");
 }
 
 function findStringValueByKeyDeep(value, keyMatchers, depth = 0, seen = new Set()) {
@@ -84,6 +106,201 @@ function getSoundCloudTrackAuthorizationFromJson(data) {
   return findStringValueByKeyDeep(data, [/^track_authorization$/i, /^trackAuthorization$/i]);
 }
 
+function isSnippedSoundCloudTranscoding(transcoding) {
+  const markerText = [
+    transcoding?.preset,
+    transcoding?.quality,
+    transcoding?.url,
+    transcoding?.format?.mime_type,
+    transcoding?.format?.protocol
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    transcoding?.snipped === true ||
+    markerText.includes("preview") ||
+    markerText.includes("snippet") ||
+    markerText.includes("snipped")
+  );
+}
+
+function scoreSoundCloudTranscoding(transcoding) {
+  const mime = String(transcoding?.format?.mime_type || "").toLowerCase();
+  const preset = String(transcoding?.preset || "").toLowerCase();
+
+  let score = 0;
+
+  if (!isSnippedSoundCloudTranscoding(transcoding)) score += 1000;
+  if (mime.includes("audio/aac")) score += 300;
+  if (preset.includes("aac_160k")) score += 200;
+  if (mime.includes("audio/mpeg")) score += 120;
+  if (preset.includes("mp3")) score += 80;
+
+  return score;
+}
+
+function collectSoundCloudHlsTranscodings(value, result = [], depth = 0, seen = new Set()) {
+  if (!value || typeof value !== "object" || depth > 8 || seen.has(value)) {
+    return result;
+  }
+
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    value.forEach((item) =>
+      collectSoundCloudHlsTranscodings(item, result, depth + 1, seen)
+    );
+
+    return result;
+  }
+
+  const protocol = String(value?.format?.protocol || "").toLowerCase();
+
+  if (value.url && protocol === "hls" && !isSnippedSoundCloudTranscoding(value)) {
+    result.push(value);
+  }
+
+  Object.values(value).forEach((item) =>
+    collectSoundCloudHlsTranscodings(item, result, depth + 1, seen)
+  );
+
+  return result;
+}
+
+function getSoundCloudHlsCandidateUrlsFromJson(data, baseUrl) {
+  const transcodings = collectSoundCloudHlsTranscodings(data);
+
+  return transcodings
+    .sort((a, b) => scoreSoundCloudTranscoding(b) - scoreSoundCloudTranscoding(a))
+    .map((transcoding) => {
+      try {
+        return new URL(transcoding.url, baseUrl).href;
+      } catch {
+        return "";
+      }
+    })
+    .filter(Boolean);
+}
+
+function getSoundCloudPolicyFromJson(data) {
+  return String(data?.policy || "").toUpperCase();
+}
+
+function getSoundCloudAvailabilityErrorFromJson(data) {
+  const policy = getSoundCloudPolicyFromJson(data);
+
+  if (policy === "BLOCK") {
+    return "Трек недоступен в текущем регионе";
+  }
+
+  if (policy === "SNIP") {
+    return "Трек доступен только как 30-секундный preview";
+  }
+
+  if (data?.streamable === false) {
+    return "Трек недоступен для стриминга";
+  }
+
+  return "";
+}
+
+function getDirectAudioExtensionFromTranscoding(transcoding) {
+  const mime = String(transcoding?.format?.mime_type || "").toLowerCase();
+  const preset = String(transcoding?.preset || "").toLowerCase();
+
+  if (mime.includes("mpeg") || preset.includes("mp3")) {
+    return ".mp3";
+  }
+
+  if (mime.includes("aac") || preset.includes("aac")) {
+    return ".m4a";
+  }
+
+  return ".audio";
+}
+
+function getSoundCloudTranscodingKind(transcoding) {
+  const protocol = String(transcoding?.format?.protocol || "").toLowerCase();
+
+  if (protocol === "hls") return "hls";
+  if (protocol === "progressive") return "progressive";
+
+  return "";
+}
+
+function collectSoundCloudStreamCandidates(value, result = [], depth = 0, seen = new Set()) {
+  if (!value || typeof value !== "object" || depth > 8 || seen.has(value)) {
+    return result;
+  }
+
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    value.forEach((item) =>
+      collectSoundCloudStreamCandidates(item, result, depth + 1, seen)
+    );
+
+    return result;
+  }
+
+  const kind = getSoundCloudTranscodingKind(value);
+
+  if (value.url && kind && !isSnippedSoundCloudTranscoding(value)) {
+    result.push({
+      url: String(value.url),
+      kind,
+      mimeType: String(value?.format?.mime_type || ""),
+      extension: getDirectAudioExtensionFromTranscoding(value),
+      preset: String(value?.preset || "")
+    });
+  }
+
+  Object.values(value).forEach((item) =>
+    collectSoundCloudStreamCandidates(item, result, depth + 1, seen)
+  );
+
+  return result;
+}
+
+function scoreSoundCloudStreamCandidate(candidate) {
+  const mime = String(candidate?.mimeType || "").toLowerCase();
+  const preset = String(candidate?.preset || "").toLowerCase();
+
+  let score = 0;
+
+  if (candidate.kind === "hls") score += 1000;
+  if (candidate.kind === "progressive") score += 500;
+  if (mime.includes("audio/aac")) score += 200;
+  if (preset.includes("aac_160k")) score += 150;
+  if (mime.includes("audio/mpeg")) score += 120;
+  if (preset.includes("mp3")) score += 80;
+
+  return score;
+}
+
+function getSoundCloudStreamCandidatesFromJson(data, baseUrl) {
+  return collectSoundCloudStreamCandidates(data)
+    .sort((a, b) => scoreSoundCloudStreamCandidate(b) - scoreSoundCloudStreamCandidate(a))
+    .map((candidate) => {
+      try {
+        return {
+          ...candidate,
+          url: new URL(candidate.url, baseUrl).href
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function looksLikeHlsPlaylistUrl(url) {
+  return /\.m3u8(?:$|\?)/i.test(String(url)) ||
+    String(url).includes("playlist.m3u8");
+}
+
 function getSoundCloudQueryParamsFromUrl(url) {
   const parsedUrl = new URL(url);
 
@@ -99,35 +316,46 @@ function pushUniqueUrl(urls, seenUrls, url) {
   urls.push(url);
 }
 
-function buildSoundCloudResolveUrls({ apiUrl, trackId, trackUrn, clientId, trackAuthorization }) {
+function buildSoundCloudResolveUrls({ trackId, trackUrn, permalinkUrl, clientId }) {
   const urls = [];
   const seenUrls = new Set();
   const params = {
-    client_id: clientId,
-    track_authorization: trackAuthorization
+    client_id: clientId
   };
-
-  if (apiUrl) {
-    pushUniqueUrl(urls, seenUrls, appendQueryParams(apiUrl, params));
-  }
 
   const numericTrackId = getNumericSoundCloudTrackId(trackId, trackUrn);
 
+  // 1. Самый свежий вариант: resolve по permalink.
+  if (permalinkUrl) {
+    pushUniqueUrl(
+      urls,
+      seenUrls,
+      appendSoundCloudApiQueryParams(
+        `https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(permalinkUrl)}`,
+        params
+      )
+    );
+  }
+
+  // 2. Потом свежий track object по id.
   if (numericTrackId) {
     pushUniqueUrl(
       urls,
       seenUrls,
-      appendQueryParams(
+      appendSoundCloudApiQueryParams(
         `https://api-v2.soundcloud.com/tracks/${numericTrackId}`,
         params
       )
     );
+  }
 
+  // 3. URN-вариант.
+  if (trackUrn) {
     pushUniqueUrl(
       urls,
       seenUrls,
-      appendQueryParams(
-        `https://api-v2.soundcloud.com/tracks/${numericTrackId}/streams`,
+      appendSoundCloudApiQueryParams(
+        `https://api-v2.soundcloud.com/tracks/${encodeSoundCloudTrackRefForPath(trackUrn)}`,
         params
       )
     );
@@ -136,14 +364,44 @@ function buildSoundCloudResolveUrls({ apiUrl, trackId, trackUrn, clientId, track
   return urls;
 }
 
-async function resolveSoundCloudHlsPlaylist(initialUrl) {
-  let currentUrl = initialUrl;
-  let inheritedParams = getSoundCloudQueryParamsFromUrl(initialUrl);
 
-  for (let step = 0; step < 5; step++) {
+async function resolveSoundCloudHlsPlaylist(initialUrl) {
+  const queue = [
+    {
+      url: initialUrl,
+      kind: "api",
+      extension: "",
+      mimeType: ""
+    }
+  ];
+
+  const seenUrls = new Set();
+  const errors = [];
+  let resolvedDurationMs = 0;
+
+  let inheritedParams = {
+    client_id: getSoundCloudQueryParamsFromUrl(initialUrl).client_id,
+    track_authorization: ""
+  };
+
+  while (queue.length > 0 && seenUrls.size < 40) {
+    const current = queue.shift();
+    let currentUrl = current?.url || "";
+
+    if (!currentUrl || seenUrls.has(currentUrl)) {
+      continue;
+    }
+
+    seenUrls.add(currentUrl);
+
     const response = await fetch(currentUrl, {
-      credentials: "include"
-    });
+    credentials: "include",
+    cache: "no-store",
+    headers: {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache"
+    }
+  });
 
     if (!response.ok) {
       let errorBody = "";
@@ -157,8 +415,12 @@ async function resolveSoundCloudHlsPlaylist(initialUrl) {
       const parsedUrl = new URL(currentUrl);
       const safeUrl = parsedUrl.origin + parsedUrl.pathname;
       const details = errorBody ? `: ${errorBody}` : "";
+      const message = `SoundCloud API HTTP ${response.status} @ ${safeUrl}${details}`;
 
-      throw new Error(`SoundCloud API HTTP ${response.status} @ ${safeUrl}${details}`);
+      errors.push(message);
+      console.warn("[Media Downloader] SoundCloud stream candidate failed:", message);
+
+      continue;
     }
 
     const text = await response.text();
@@ -166,8 +428,10 @@ async function resolveSoundCloudHlsPlaylist(initialUrl) {
 
     if (trimmed.startsWith("#EXTM3U")) {
       return {
+        kind: "hls",
         playlistUrl: currentUrl,
-        playlistText: text
+        playlistText: text,
+        durationMs: resolvedDurationMs
       };
     }
 
@@ -179,74 +443,143 @@ async function resolveSoundCloudHlsPlaylist(initialUrl) {
       parsedJson = null;
     }
 
-    const trackAuthorizationFromJson = parsedJson
-      ? getSoundCloudTrackAuthorizationFromJson(parsedJson)
-      : "";
+    if (!parsedJson) {
+      continue;
+    }
 
-    if (trackAuthorizationFromJson && !inheritedParams.track_authorization) {
+    const availabilityError = getSoundCloudAvailabilityErrorFromJson(parsedJson);
+
+    if (availabilityError) {
+      errors.push(availabilityError);
+      console.warn("[Media Downloader] SoundCloud availability:", availabilityError);
+      continue;
+    }
+
+    const trackAuthorizationFromJson =
+      getSoundCloudTrackAuthorizationFromJson(parsedJson);
+
+    if (trackAuthorizationFromJson) {
       inheritedParams = {
         ...inheritedParams,
         track_authorization: trackAuthorizationFromJson
       };
     }
 
-    const nextUrl = extractHlsPlaylistUrlFromJsonText(text, currentUrl);
-
-    if (!nextUrl || nextUrl === currentUrl) {
-      throw new Error("HLS playlist URL не найден в ответе API");
+    if (parsedJson) {
+    console.log("[Media Downloader] SoundCloud track/access debug", {
+      url: currentUrl,
+      kind: parsedJson.kind,
+      title: parsedJson.title,
+      access: parsedJson.access,
+      policy: parsedJson.policy,
+      streamable: parsedJson.streamable,
+      monetization_model: parsedJson.monetization_model,
+      hasMedia: Boolean(parsedJson.media),
+      transcodings: Array.isArray(parsedJson.media?.transcodings)
+        ? parsedJson.media.transcodings.map((item) => ({
+            preset: item.preset,
+            protocol: item.format?.protocol,
+            mime: item.format?.mime_type,
+            snipped: item.snipped,
+            url: item.url
+          }))
+        : []
+    });
+    const durationFromJson = getSoundCloudDurationMsFromJson(parsedJson);
+    if (durationFromJson && !resolvedDurationMs) {
+      resolvedDurationMs = durationFromJson;
     }
-
-    currentUrl = appendQueryParams(nextUrl, inheritedParams);
-    inheritedParams = getSoundCloudQueryParamsFromUrl(currentUrl);
   }
 
-  throw new Error("SoundCloud API не вернул HLS playlist после нескольких unwrap-запросов");
+    // Ответ stream endpoint'а обычно выглядит как { url: "https://..." }.
+    // Для HLS это будет playlist.m3u8, для progressive — прямой audio URL.
+    if (typeof parsedJson.url === "string" && parsedJson.url) {
+      const resolvedUrl = new URL(parsedJson.url, currentUrl).href;
+
+      if (looksLikeHlsPlaylistUrl(resolvedUrl)) {
+        const preparedUrl = appendSoundCloudApiQueryParams(
+          resolvedUrl,
+          inheritedParams
+        );
+
+        if (!seenUrls.has(preparedUrl)) {
+          queue.push({
+            url: preparedUrl,
+            kind: "hls",
+            extension: current.extension,
+            mimeType: current.mimeType
+          });
+        }
+      } else {
+        return {
+          kind: "direct",
+          directUrl: resolvedUrl,
+          directExtension: current.extension || ".mp3",
+          directMimeType: current.mimeType || "audio/mpeg",
+          durationMs: resolvedDurationMs
+        };
+      }
+    }
+
+    // Если это track JSON, вытаскиваем все transcodings:
+    // сначала HLS, потом progressive.
+    const streamCandidates = getSoundCloudStreamCandidatesFromJson(
+      parsedJson,
+      currentUrl
+    );
+
+    for (const candidate of streamCandidates) {
+      const preparedUrl = appendSoundCloudApiQueryParams(
+        candidate.url,
+        inheritedParams
+      );
+
+      if (!seenUrls.has(preparedUrl)) {
+        queue.push({
+          url: preparedUrl,
+          kind: candidate.kind,
+          extension: candidate.extension,
+          mimeType: candidate.mimeType
+        });
+      }
+    }
+
+    const nextUrl = extractHlsPlaylistUrlFromJsonText(text, currentUrl);
+
+    if (nextUrl && nextUrl !== currentUrl) {
+      const preparedNextUrl = appendSoundCloudApiQueryParams(
+        nextUrl,
+        inheritedParams
+      );
+
+      if (!seenUrls.has(preparedNextUrl)) {
+        queue.push({
+          url: preparedNextUrl,
+          kind: "hls",
+          extension: current.extension,
+          mimeType: current.mimeType
+        });
+      }
+    }
+  }
+
+  const uniqueErrors = [...new Set(errors)].slice(-6);
+
+  throw new Error(
+    uniqueErrors.join(" | ") ||
+      "SoundCloud API не вернул рабочий HLS/progressive stream"
+  );
 }
 
-async function resolveSoundCloudHlsPlaylist(initialUrl) {
-  let currentUrl = initialUrl;
-
-  for (let step = 0; step < 5; step++) {
-    const response = await fetch(currentUrl, {
-      credentials: "include"
-    });
-
-    if (!response.ok) {
-      let errorBody = "";
-
-      try {
-        errorBody = (await response.text()).slice(0, 180);
-      } catch {
-        // ignore
-      }
-
-      const parsedUrl = new URL(currentUrl);
-      const safeUrl = parsedUrl.origin + parsedUrl.pathname;
-      const details = errorBody ? `: ${errorBody}` : "";
-
-      throw new Error(`SoundCloud API HTTP ${response.status} @ ${safeUrl}${details}`);
-    }
-
-    const text = await response.text();
-    const trimmed = text.trimStart();
-
-    if (trimmed.startsWith("#EXTM3U")) {
-      return {
-        playlistUrl: currentUrl,
-        playlistText: text
-      };
-    }
-
-    const nextUrl = extractHlsPlaylistUrlFromJsonText(text, currentUrl);
-
-    if (!nextUrl || nextUrl === currentUrl) {
-      throw new Error("HLS playlist URL не найден в ответе API");
-    }
-
-    currentUrl = nextUrl;
-  }
-
-  throw new Error("SoundCloud API не вернул HLS playlist после нескольких unwrap-запросов");
+function getSoundCloudDurationMsFromJson(data) {
+  return Number(
+    data?.duration ||
+      data?.full_duration ||
+      data?.fullDuration ||
+      data?.track?.duration ||
+      data?.track?.full_duration ||
+      0
+  ) || 0;
 }
 
 export function registerMessageRouter() {
@@ -630,10 +963,11 @@ export function registerMessageRouter() {
     // из extension page SoundCloud отбрасывает запросы (HTTP 401).
     // Возвращает текст .m3u8.
     if (message.type === "RESOLVE_TRACK_HLS") {
+    const permalinkUrl = message.permalinkUrl;
     const trackId = message.trackId;
     const trackUrn = message.trackUrn;
-    const apiUrl = message.apiUrl;
-    const trackAuthorization = message.trackAuthorization;
+    const apiUrl = "";
+    const trackAuthorization = "";
     const clientId = message.clientId;
 
     if (!trackId && !trackUrn && !apiUrl) {
@@ -653,11 +987,10 @@ export function registerMessageRouter() {
 
     try {
       resolveUrls = buildSoundCloudResolveUrls({
-        apiUrl,
         trackId,
         trackUrn,
-        clientId,
-        trackAuthorization
+        permalinkUrl,
+        clientId
       });
     } catch (error) {
       sendResponse({
@@ -681,8 +1014,13 @@ export function registerMessageRouter() {
 
           sendResponse({
             ok: true,
-            playlistUrl: resource.playlistUrl,
-            playlistText: resource.playlistText
+            kind: resource.kind || "hls",
+            playlistUrl: resource.playlistUrl || "",
+            playlistText: resource.playlistText || "",
+            directUrl: resource.directUrl || "",
+            directExtension: resource.directExtension || "",
+            directMimeType: resource.directMimeType || "",
+            durationMs: resource.durationMs || 0
           });
           return;
         } catch (error) {

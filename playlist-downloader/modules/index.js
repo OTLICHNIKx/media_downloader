@@ -57,6 +57,7 @@ async function getStoredPlaylistBatch(batchId) {
     ok: true,
     tracks: batch.tracks,
     playlistTitle: batch.playlistTitle || "playlist",
+    playlistAuthor: batch.playlistAuthor || "",
     clientId: batch.clientId || null
   };
 }
@@ -201,7 +202,7 @@ function showDownloadZipButton(results, playlistTitle) {
   downloadZipButton.classList.remove("hidden");
   downloadZipButton.textContent = `Скачать ZIP (${results.length} из ${totalTracks})`;
   downloadZipButton.onclick = () => {
-    downloadZip(results, playlistTitle);
+    downloadZip(results, zipTitle);
   };
 }
 
@@ -250,7 +251,10 @@ async function init() {
       }
     }
 
-    const { tracks, playlistTitle, clientId } = resolvedResponse;
+    const { tracks, playlistTitle, playlistAuthor, clientId } = resolvedResponse;
+    const zipTitle = playlistAuthor
+      ? `${playlistAuthor} - ${playlistTitle}`
+      : playlistTitle;
 
       totalTracks = tracks.length;
       titleElement.textContent = playlistTitle;
@@ -311,11 +315,11 @@ async function init() {
 
         // Если все треки скачались — сразу предлагаем ZIP.
         // Если часть упала — показываем кнопку ручного скачивания.
-        showDownloadZipButton(results, playlistTitle);
+        showDownloadZipButton(results, zipTitle);
 
         // Автоскачивание ZIP если все успешно.
         if (results.length === totalTracks && !abortController.signal.aborted) {
-          downloadZip(results, playlistTitle);
+          downloadZip(results, zipTitle);
         }
       } catch (error) {
         showCancelButton(false);
@@ -323,7 +327,7 @@ async function init() {
 
         // Даже при фатальной ошибке могли быть скачаны некоторые треки.
         if (lastResults.length > 0) {
-          showDownloadZipButton(lastResults, playlistTitle);
+          showDownloadZipButton(lastResults, zipTitle);
         }
       }
     }

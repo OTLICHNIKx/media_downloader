@@ -3,7 +3,14 @@ import {
   isLikelyHlsPlaylistText,
   extractHlsPlaylistUrlFromJsonResource
 } from "./hls-json.js";
-import { initialFallbackPlaylistId } from "./ui-state.js";
+import {
+  initialFallbackPlaylistId,
+  initialSite,
+  initialSoundCloudTrackId,
+  initialSoundCloudPermalinkUrl,
+  initialSoundCloudClientId,
+  initialSoundCloudApiUrl
+} from "./ui-state.js";
 
 export function isAuthLikePlaylistError(error) {
   const message = String(error?.message || "");
@@ -43,6 +50,77 @@ export function getSoundCloudFallbackPlaylist(fallbackPlaylistId) {
   });
 }
 
+function getQueryParamFromUrl(url, name) {
+  try {
+    return new URL(url).searchParams.get(name) || "";
+  } catch {
+    return "";
+  }
+}
+
+function getSoundCloudTrackIdFromUrl(url) {
+  if (!url) return "";
+
+  try {
+    const decoded = decodeURIComponent(url);
+    const match = decoded.match(/soundcloud:tracks:(\d+)/i);
+
+    return match && match[1] ? match[1] : "";
+  } catch {
+    return "";
+  }
+}
+
+function resolveSoundCloudTrackHlsFresh() {
+  return new Promise((resolve, reject) => {
+    const trackId =
+      initialSoundCloudTrackId ||
+      getSoundCloudTrackIdFromUrl(initialSoundCloudApiUrl);
+
+    const clientId = getQueryParamFromUrl(initialSoundCloudApiUrl, "client_id");
+
+    if (!trackId || !clientId) {
+      reject(new Error("Недостаточно данных для fresh SoundCloud resolve."));
+      return;
+    }
+
+    chrome.runtime.sendMessage(
+      {
+        type: "RESOLVE_TRACK_HLS",
+        trackId,
+        clientId
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+
+        if (!response || !response.ok) {
+          reject(new Error(response?.error || "RESOLVE_TRACK_HLS failed"));
+          return;
+        }
+
+        if (response.kind !== "hls") {
+          reject(
+            new Error(
+              `SoundCloud вернул не-HLS поток: ${response.kind || "unknown"}`
+            )
+          );
+          return;
+        }
+
+        resolve({
+          playlistUrl: response.playlistUrl,
+          playlistText: response.playlistText,
+          resolvedFrom: "soundcloud-fresh-resolve",
+          durationMs: response.durationMs || 0
+        });
+      }
+    );
+  });
+}
+
 export async function fetchHlsPlaylistResource(url, options = {}) {
   const firstText = await fetchText(url, { ...options, label: "playlist" });
 
@@ -71,6 +149,20 @@ export async function fetchHlsPlaylistResource(url, options = {}) {
 }
 
 export async function fetchHlsPlaylistResourceWithFallback(url, options = {}) {
+  if (initialSite === "soundcloud") {
+    if (
+      initialSoundCloudTrackId ||
+      initialSoundCloudPermalinkUrl ||
+      initialSoundCloudApiUrl
+    ) {
+      return resolveSoundCloudTrackHlsFresh();
+    }
+
+    throw new Error(
+      "SoundCloud solo-трек не привязан к permalink/id. Скачивание остановлено, чтобы не скачать соседний трек."
+    );
+  }
+
   try {
     return await fetchHlsPlaylistResource(url, options);
   } catch (error) {

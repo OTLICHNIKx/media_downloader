@@ -21,13 +21,19 @@ export const isEmbedMode = params.get("embed") === "1";
 // на SoundCloud — авто-выбор MP3 и автостарт скачивания.
 export const initialSite = params.get("site") || null;
 
+export const initialSoundCloudTrackId = params.get("soundCloudTrackId") || "";
+export const initialSoundCloudPermalinkUrl = params.get("soundCloudPermalinkUrl") || "";
+export const initialSoundCloudClientId = params.get("soundCloudClientId") || "";
+export const initialSoundCloudApiUrl = params.get("soundCloudApiUrl") || "";
+
 // Разделяемое состояние downloader'а. Изменяется downloader.js, читается index.js.
 export const downloaderState = {
   loadedMasterVariants: [],
   preparedDownload: null,
   currentDownloadAbortController: null,
   outputMode: initialOutputMode,
-  outputModeAvailable: false
+  outputModeAvailable: false,
+  expectedDurationMs: 0
 };
 
 export function setStatus(text) {

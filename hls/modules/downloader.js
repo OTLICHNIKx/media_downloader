@@ -145,6 +145,9 @@ export async function prepareSelectedVariant() {
       selectedIndex
     );
 
+    downloaderState.preparedDownload.expectedDurationMs =
+      downloaderState.expectedDurationMs || 0;
+
     updateOutputModeAvailability(downloaderState.preparedDownload);
 
     setDetails(
@@ -253,6 +256,146 @@ async function finalizeOutput(blob, prepared) {
 // параллелизма упрётся в лимит и не даст выигрышка.
 const SEGMENT_DOWNLOAD_CONCURRENCY = 6;
 
+const HLS_COMPLETE_EXTRA_WAIT_MS = 120_000;
+const HLS_COMPLETE_MIN_RELOAD_DELAY_MS = 2_000;
+const HLS_COMPLETE_MAX_RELOAD_DELAY_MS = 12_000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getHlsTargetDurationMs(playlistText) {
+  const match = String(playlistText || "").match(
+    /#EXT-X-TARGETDURATION:(\d+(?:\.\d+)?)/i
+  );
+
+  if (!match) return 6_000;
+
+  return Math.max(
+    HLS_COMPLETE_MIN_RELOAD_DELAY_MS,
+    Math.min(
+      HLS_COMPLETE_MAX_RELOAD_DELAY_MS,
+      Number.parseFloat(match[1]) * 1000
+    )
+  );
+}
+
+function getHlsPlaylistDurationMs(playlistText) {
+  const lines = String(playlistText || "").split(/\r?\n/);
+  let totalMs = 0;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!trimmed.startsWith("#EXTINF:")) {
+      continue;
+    }
+
+    const seconds = Number.parseFloat(
+      trimmed.slice("#EXTINF:".length).split(",")[0]
+    );
+
+    if (Number.isFinite(seconds)) {
+      totalMs += seconds * 1000;
+    }
+  }
+
+  return totalMs;
+}
+
+function getAllowedDurationGapMs(expectedDurationMs) {
+  if (!expectedDurationMs) return 0;
+
+  return Math.min(
+    10_000,
+    Math.max(3_000, expectedDurationMs * 0.01)
+  );
+}
+
+function isPreparedDurationComplete(prepared) {
+  const expectedDurationMs = Number(prepared?.expectedDurationMs || 0) || 0;
+
+  if (!expectedDurationMs) {
+    return true;
+  }
+
+  const actualDurationMs = getHlsPlaylistDurationMs(prepared.playlistText);
+  const allowedGapMs = getAllowedDurationGapMs(expectedDurationMs);
+
+  return actualDurationMs + allowedGapMs >= expectedDurationMs;
+}
+
+function getPreparedDurationStatus(prepared) {
+  const expectedDurationMs = Number(prepared?.expectedDurationMs || 0) || 0;
+  const actualDurationMs = getHlsPlaylistDurationMs(prepared.playlistText);
+
+  return {
+    expectedDurationMs,
+    actualDurationMs
+  };
+}
+
+async function reloadPreparedPlaylist(prepared, abortController) {
+  const playlistResource = await fetchHlsPlaylistResource(prepared.playlistUrl, {
+    signal: abortController.signal,
+    label: "playlist"
+  });
+
+  const nextPrepared = prepareMediaPlaylist(
+    playlistResource.playlistUrl,
+    playlistResource.playlistText,
+    prepared.variant,
+    prepared.variantIndex
+  );
+
+  nextPrepared.expectedDurationMs = prepared.expectedDurationMs || 0;
+
+  return nextPrepared;
+}
+
+async function waitForCompletePreparedPlaylist(prepared, abortController) {
+  const expectedDurationMs = Number(prepared?.expectedDurationMs || 0) || 0;
+
+  if (!expectedDurationMs) {
+    return prepared;
+  }
+
+  let currentPrepared = prepared;
+  const startedAt = Date.now();
+  const maxWaitMs = expectedDurationMs + HLS_COMPLETE_EXTRA_WAIT_MS;
+
+  while (!isPreparedDurationComplete(currentPrepared)) {
+    const { actualDurationMs } = getPreparedDurationStatus(currentPrepared);
+
+    if (Date.now() - startedAt >= maxWaitMs) {
+      throw new Error(
+        `HLS playlist неполный: получено ${Math.round(actualDurationMs / 1000)}с из ${Math.round(expectedDurationMs / 1000)}с`
+      );
+    }
+
+    setStatus(
+      `Ожидаю полный HLS: ${Math.round(actualDurationMs / 1000)}с из ${Math.round(expectedDurationMs / 1000)}с`
+    );
+
+    await sleep(getHlsTargetDurationMs(currentPrepared.playlistText));
+
+    currentPrepared = await reloadPreparedPlaylist(
+      currentPrepared,
+      abortController
+    );
+  }
+
+  const { actualDurationMs } = getPreparedDurationStatus(currentPrepared);
+
+  console.log("[HLS Downloader] HLS duration complete", {
+    actualDurationMs,
+    expectedDurationMs,
+    segments: currentPrepared.segmentUrls.length
+  });
+
+  return currentPrepared;
+}
+
 // Параллельная загрузка сегментов с сохранением порядка по индексу.
 // Запускает до concurrency одновременных fetch; результат складывается
 // в results[index], чтобы склейка шла строго в исходном порядке, а не
@@ -294,13 +437,25 @@ export async function startPreparedDownload() {
   const abortController = new AbortController();
   downloaderState.currentDownloadAbortController = abortController;
 
-  const prepared = downloaderState.preparedDownload;
+  let prepared = downloaderState.preparedDownload;
+
   const buffers = [];
   let downloadedBytes = 0;
   let downloadedSegments = 0;
 
   setDownloadUiState(true);
   setProgress(3);
+
+  if (prepared.expectedDurationMs) {
+    setStatus("Проверяю полноту HLS playlist...");
+
+    prepared = await waitForCompletePreparedPlaylist(
+      prepared,
+      abortController
+    );
+
+    downloaderState.preparedDownload = prepared;
+  }
 
   try {
     if (prepared.initMapUrl) {

@@ -103,6 +103,7 @@ async function initializeHlsDownloader() {
     setProgress(4);
 
     const playlistResource = await fetchHlsPlaylistResourceWithFallback(initialPlaylistUrl);
+    downloaderState.expectedDurationMs = Number(playlistResource.durationMs || 0) || 0;
 
     sourceUrlElement.textContent = playlistResource.resolvedFrom
       ? `${playlistResource.resolvedFrom}\n→ ${playlistResource.playlistUrl}`
@@ -130,6 +131,9 @@ async function initializeHlsDownloader() {
       playlistResource.playlistUrl,
       playlistResource.playlistText
     );
+
+    downloaderState.preparedDownload.expectedDurationMs =
+      downloaderState.expectedDurationMs || 0;
 
     setOutputModeAvailable(Boolean(downloaderState.preparedDownload?.outputInfo?.mimeType?.startsWith("audio/")));
 

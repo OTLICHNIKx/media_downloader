@@ -33,6 +33,32 @@ function isStreamForDifferentTrack(tabId, url, expectedTrackId) {
   return streamTrackId !== expectedTrackId;
 }
 
+function shouldRejectUnknownSoundCloudStreamForExpectedTrack(tabId, url, expectedTrackId) {
+  if (!expectedTrackId) return false;
+
+  const siteHint = getSoundCloudCaptureHint(url);
+
+  if (!siteHint) {
+    return false;
+  }
+
+  const streamTrackId = getStreamTrackIdForTab(tabId, url);
+
+  // Если ID известен — обычная проверка isStreamForDifferentTrack уже решит.
+  if (streamTrackId) {
+    return false;
+  }
+
+  // ВАЖНО:
+  // playlist.m3u8 / фрагменты SoundCloud часто не содержат trackId в URL.
+  // Если принять такой URL во время capture, можно привязать поток соседнего
+  // трека из prefetch/autoplay.
+  //
+  // API endpoint вида /media/soundcloud:tracks:ID/... содержит trackId,
+  // поэтому до этой ветки обычно не доходит.
+  return siteHint === "manifest" || siteHint === "fragment";
+}
+
 export function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}) {
   if (tabId < 0 || !url || !streamInfo || !streamInfo.type) return;
 
@@ -83,6 +109,32 @@ export function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}
     return;
   }
 
+  if (
+      shouldRejectUnknownSoundCloudStreamForExpectedTrack(
+        tabId,
+        url,
+        activeCapture.expectedTrackId
+      )
+    ) {
+      rememberDiagnostic(
+        tabId,
+        "capture-rejected-unknown-soundcloud-track",
+        "Во время capture замечен SoundCloud playlist/fragment без trackId. Он проигнорирован, чтобы не скачать соседний трек.",
+        {
+          captureId: activeCapture.captureId,
+          trackTitle: activeCapture.trackTitle || "media",
+          expectedTrackId: activeCapture.expectedTrackId || null,
+          url,
+          siteHint: getSoundCloudCaptureHint(url),
+          contentType: streamInfo.contentType || meta.contentType || null,
+          requestType: meta.requestType || null,
+          statusCode: meta.statusCode || null
+        }
+      );
+
+      return;
+    }
+
   if (!capturedStreamsByTabId[tabId]) {
     capturedStreamsByTabId[tabId] = {};
   }
@@ -100,18 +152,19 @@ export function rememberStreamForActiveCapture(tabId, url, streamInfo, meta = {}
   const captureScore = getCaptureCandidateScore(url, streamInfo, meta);
 
   const capturedStream = {
-    url,
-    type: streamInfo.type,
-    extension: streamInfo.extension || null,
-    contentType: streamInfo.contentType || meta.contentType || null,
-    captureId: activeCapture.captureId,
-    trackTitle: activeCapture.trackTitle || "media",
-    foundAt: now,
-    isManifestLike,
-    isFragmentLike,
-    captureScore,
-    siteHint: getSoundCloudCaptureHint(url)
-  };
+      url,
+      type: streamInfo.type,
+      extension: streamInfo.extension || null,
+      contentType: streamInfo.contentType || meta.contentType || null,
+      captureId: activeCapture.captureId,
+      trackTitle: activeCapture.trackTitle || "media",
+      soundCloudTrackId: activeCapture.expectedTrackId || null,
+      foundAt: now,
+      isManifestLike,
+      isFragmentLike,
+      captureScore,
+      siteHint: getSoundCloudCaptureHint(url)
+    };
 
   const existingCapturedStream = capturedStreamsByTabId[tabId][activeCapture.captureId] || null;
 

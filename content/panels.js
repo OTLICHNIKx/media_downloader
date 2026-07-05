@@ -32,14 +32,42 @@ function openHlsDownloaderPanel(mediaItem) {
   const site = getSiteNameForDownloader();
   const siteParam = site ? `&site=${encodeURIComponent(site)}` : "";
 
+  const soundCloudTrackIdParam =
+  mediaItem.soundCloudTrackId
+    ? `&soundCloudTrackId=${encodeURIComponent(mediaItem.soundCloudTrackId)}`
+    : "";
+
+  const soundCloudPermalinkUrlParam = mediaItem.soundCloudPermalinkUrl
+    ? `&soundCloudPermalinkUrl=${encodeURIComponent(mediaItem.soundCloudPermalinkUrl)}`
+    : "";
+
+  const soundCloudClientIdParam = mediaItem.soundCloudClientId
+    ? `&soundCloudClientId=${encodeURIComponent(mediaItem.soundCloudClientId)}`
+    : "";
+
+  const soundCloudApiUrl =
+    mediaItem.resolvedFrom ||
+    (String(mediaItem.url || "").includes("api-v2.soundcloud.com")
+      ? mediaItem.url
+      : "");
+
+  const soundCloudApiUrlParam =
+    soundCloudApiUrl
+      ? `&soundCloudApiUrl=${encodeURIComponent(soundCloudApiUrl)}`
+      : "";
+
   const panelUrl =
     chrome.runtime.getURL("hls/hls.html") +
     `?url=${encodeURIComponent(mediaItem.url)}` +
     `&filename=${encodeURIComponent(mediaItem.filename || "media.m3u8")}` +
     fallbackParam +
     siteParam +
+    soundCloudTrackIdParam +
+    soundCloudPermalinkUrlParam +
+    soundCloudClientIdParam +
+    soundCloudApiUrlParam +
     `&embed=1`;
-
+  
   const iframe = document.createElement("iframe");
 
   iframe.id = HLS_PANEL_ID;

@@ -85,6 +85,10 @@ function buildStreamMediaItem(stream, source = "captured-stream") {
     quality,
     filename: getFileName(normalizedUrl) || `media.${extension}`,
     source,
+    resolvedFrom: stream.resolvedFrom || null,
+    soundCloudTrackId: stream.soundCloudTrackId || null,
+    soundCloudPermalinkUrl: stream.soundCloudPermalinkUrl || null,
+    soundCloudClientId: stream.soundCloudClientId || null,
     soundCloudFallbackPlaylistId: stream.soundCloudFallbackPlaylistId || null,
     soundCloudFallbackSegmentCount: stream.soundCloudFallbackSegmentCount || null,
     soundCloudFallbackQuality: stream.soundCloudFallbackQuality || null
@@ -110,6 +114,74 @@ function getSoundCloudTrackIdFromTrackElement(trackElement) {
   }
 
   return null;
+}
+
+function getSoundCloudTrackPermalinkFromTrackElement(trackElement) {
+  if (!trackElement || !(trackElement instanceof Element)) return "";
+
+  const selectors = [
+    ".soundTitle__title[href]",
+    ".soundTitle__title a[href]",
+    ".trackItem__trackTitle[href]",
+    ".trackItem__trackTitle a[href]",
+    "a[itemprop='url'][href]"
+  ];
+
+  for (const selector of selectors) {
+    const links = trackElement.querySelectorAll(selector);
+
+    for (const link of links) {
+      const href = link.getAttribute("href") || "";
+      if (!href) continue;
+
+      try {
+        const url = new URL(href, window.location.origin);
+
+        if (!url.hostname.includes("soundcloud.com")) continue;
+
+        const parts = url.pathname.split("/").filter(Boolean);
+
+        if (parts.length < 2) continue;
+        if (url.pathname.includes("/sets/")) continue;
+        if (url.pathname.includes("/likes")) continue;
+        if (url.pathname.includes("/reposts")) continue;
+        if (url.pathname.includes("/comments")) continue;
+
+        return url.href.split("?")[0].split("#")[0];
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return "";
+}
+
+function getSoundCloudClientIdForSoloTrack() {
+  try {
+    if (typeof getClientId === "function") {
+      return getClientId() || "";
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const entries = performance.getEntriesByType("resource");
+
+    for (const entry of entries) {
+      const name = entry.name || "";
+      const match = name.match(/client_id=([a-zA-Z0-9]{20,40})/);
+
+      if (match && match[1]) {
+        return match[1];
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return "";
 }
 
 // Ищет трек-карточку по SoundCloud trackId среди видимых [data-media-downloader-track].
@@ -289,22 +361,50 @@ function enrichMediaItemWithTrackMetadata(mediaItem, trackElement) {
   if (!mediaItem || !trackElement) return mediaItem;
 
   const filenameBase = getTrackFilenameBase(trackElement);
-
-  if (!filenameBase) {
-    return mediaItem;
-  }
-
   const extension = getMediaItemFileExtension(mediaItem);
-  const filename = filenameBase.toLowerCase().endsWith(`.${extension}`)
-    ? filenameBase
-    : `${filenameBase}.${extension}`;
 
-  return {
+  const filename = filenameBase
+    ? (
+        filenameBase.toLowerCase().endsWith(`.${extension}`)
+          ? filenameBase
+          : `${filenameBase}.${extension}`
+      )
+    : mediaItem.filename;
+
+  const soundCloudTrackId =
+    getSoundCloudTrackIdFromTrackElement(trackElement) ||
+    mediaItem.soundCloudTrackId ||
+    "";
+
+  const soundCloudPermalinkUrl =
+    getSoundCloudTrackPermalinkFromTrackElement(trackElement) ||
+    mediaItem.soundCloudPermalinkUrl ||
+    "";
+
+  const soundCloudClientId =
+    getSoundCloudClientIdForSoloTrack() ||
+    mediaItem.soundCloudClientId ||
+    "";
+
+  const enriched = {
     ...mediaItem,
     filename,
     trackTitle: cleanMetadataText(trackElement.getAttribute(TRACK_TITLE_ATTRIBUTE) || ""),
-    trackAuthor: cleanMetadataText(trackElement.getAttribute(TRACK_AUTHOR_ATTRIBUTE) || "")
+    trackAuthor: cleanMetadataText(trackElement.getAttribute(TRACK_AUTHOR_ATTRIBUTE) || ""),
+    soundCloudTrackId,
+    soundCloudPermalinkUrl,
+    soundCloudClientId
   };
+
+  console.log("[Media Downloader] Solo SoundCloud binding:", {
+    filename,
+    soundCloudTrackId,
+    soundCloudPermalinkUrl,
+    hasClientId: Boolean(soundCloudClientId),
+    capturedUrl: mediaItem.url
+  });
+
+  return enriched;
 }
 
 // Восстанавливает кнопки скачивания на трек-карточках, которые потеряли их

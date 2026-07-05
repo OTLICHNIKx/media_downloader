@@ -66,8 +66,10 @@ function getCurrentSiteMediaAdapter() {
       cardSelectors: [
         ".soundList__item",
         ".trackItem",
-        ".sound__body",
-        "article"
+        ".systemPlaylistTrackList__item",
+        ".listenDetails__trackList .trackItem",
+        ".searchList__item",
+        ".sound"
       ],
       titleSelectors: [
         ".soundTitle__title span",
@@ -204,6 +206,12 @@ function markAdapterTrackCandidate(candidateElement, adapter, metadata) {
     return;
   }
 
+  const existingChildTrack = candidateElement.querySelector("[data-media-downloader-track]");
+
+  if (existingChildTrack) {
+    return;
+  }
+
   candidateElement.setAttribute("data-media-downloader-track", "");
   candidateElement.setAttribute(TRACK_ADAPTER_ATTRIBUTE, adapter.name);
   candidateElement.setAttribute(TRACK_TITLE_ATTRIBUTE, metadata.title);
@@ -219,7 +227,16 @@ function applyMediaMetadataAdapters() {
   if (!adapter) return;
 
   const selector = adapter.cardSelectors.join(",");
-  const candidates = Array.from(document.querySelectorAll(selector)).slice(0, 100);
+  const candidates = Array.from(document.querySelectorAll(selector))
+    .sort((a, b) => {
+      const rectA = a.getBoundingClientRect();
+      const rectB = b.getBoundingClientRect();
+
+      return rectA.width * rectA.height - rectB.width * rectB.height;
+    })
+    .slice(0, 100);
+
+
 
   candidates.forEach((candidateElement) => {
     if (!isAdapterCandidateUseful(candidateElement)) return;

@@ -963,95 +963,96 @@ export function registerMessageRouter() {
     // из extension page SoundCloud отбрасывает запросы (HTTP 401).
     // Возвращает текст .m3u8.
     if (message.type === "RESOLVE_TRACK_HLS") {
-    const permalinkUrl = message.permalinkUrl;
-    const trackId = message.trackId;
-    const trackUrn = message.trackUrn;
-    const apiUrl = "";
-    const trackAuthorization = "";
-    const clientId = message.clientId;
+      const permalinkUrl = message.permalinkUrl;
+      const trackId = message.trackId;
+      const trackUrn = message.trackUrn;
+      const clientId = message.clientId;
 
-    if (!trackId && !trackUrn && !apiUrl) {
-      sendResponse({ ok: false, error: "trackId/trackUrn/apiUrl not provided" });
-      return;
-    }
-
-    if (!clientId) {
-      sendResponse({
-        ok: false,
-        error: "client_id не передан (SoundCloud API вернёт 401)"
-      });
-      return;
-    }
-
-    let resolveUrls;
-
-    try {
-      resolveUrls = buildSoundCloudResolveUrls({
-        trackId,
-        trackUrn,
-        permalinkUrl,
-        clientId
-      });
-    } catch (error) {
-      sendResponse({
-        ok: false,
-        error: `Некорректный SoundCloud URL: ${error.message || error}`
-      });
-      return;
-    }
-
-    if (!resolveUrls || resolveUrls.length === 0) {
-      sendResponse({ ok: false, error: "SoundCloud resolve URL not built" });
-      return;
-    }
-
-    (async () => {
-      const errors = [];
-
-      for (const resolveUrl of resolveUrls) {
-        try {
-          const resource = await resolveSoundCloudHlsPlaylist(resolveUrl);
-
-          sendResponse({
-            ok: true,
-            kind: resource.kind || "hls",
-            playlistUrl: resource.playlistUrl || "",
-            playlistText: resource.playlistText || "",
-            directUrl: resource.directUrl || "",
-            directExtension: resource.directExtension || "",
-            directMimeType: resource.directMimeType || "",
-            durationMs: resource.durationMs || 0
-          });
-          return;
-        } catch (error) {
-          const message = error?.message || String(error);
-          errors.push(message);
-
-          try {
-            const parsedUrl = new URL(resolveUrl);
-            console.warn(
-              "[Media Downloader] SoundCloud resolve candidate failed:",
-              parsedUrl.origin + parsedUrl.pathname,
-              message
-            );
-          } catch {
-            console.warn(
-              "[Media Downloader] SoundCloud resolve candidate failed:",
-              message
-            );
-          }
-        }
+      if (!trackId && !trackUrn && !permalinkUrl) {
+        sendResponse({
+          ok: false,
+          error: "trackId/trackUrn/permalinkUrl not provided"
+        });
+        return;
       }
 
-      const uniqueErrors = [...new Set(errors)].slice(-3);
+      if (!clientId) {
+        sendResponse({
+          ok: false,
+          error: "client_id не передан (SoundCloud API вернёт 401)"
+        });
+        return;
+      }
 
-      sendResponse({
-        ok: false,
-        error: uniqueErrors.join(" | ") || "RESOLVE_TRACK_HLS failed"
-      });
-    })();
+      let resolveUrls;
 
-    return true; // async sendResponse
+      try {
+        resolveUrls = buildSoundCloudResolveUrls({
+          trackId,
+          trackUrn,
+          permalinkUrl,
+          clientId
+        });
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: `Некорректный SoundCloud URL: ${error.message || error}`
+        });
+        return;
+      }
+
+      if (!resolveUrls || resolveUrls.length === 0) {
+        sendResponse({ ok: false, error: "SoundCloud resolve URL not built" });
+        return;
+      }
+
+      (async () => {
+        const errors = [];
+
+        for (const resolveUrl of resolveUrls) {
+          try {
+            const resource = await resolveSoundCloudHlsPlaylist(resolveUrl);
+
+            sendResponse({
+              ok: true,
+              kind: resource.kind || "hls",
+              playlistUrl: resource.playlistUrl || "",
+              playlistText: resource.playlistText || "",
+              directUrl: resource.directUrl || "",
+              directExtension: resource.directExtension || "",
+              directMimeType: resource.directMimeType || "",
+              durationMs: resource.durationMs || 0
+            });
+            return;
+          } catch (error) {
+            const message = error?.message || String(error);
+            errors.push(message);
+
+            try {
+              const parsedUrl = new URL(resolveUrl);
+              console.warn(
+                "[Media Downloader] SoundCloud resolve candidate failed:",
+                parsedUrl.origin + parsedUrl.pathname,
+                message
+              );
+            } catch {
+              console.warn(
+                "[Media Downloader] SoundCloud resolve candidate failed:",
+                message
+              );
+            }
+          }
+        }
+
+        const uniqueErrors = [...new Set(errors)].slice(-3);
+
+        sendResponse({
+          ok: false,
+          error: uniqueErrors.join(" | ") || "RESOLVE_TRACK_HLS failed"
+        });
+      })();
+
+      return true; // async sendResponse
   }
   });
 }

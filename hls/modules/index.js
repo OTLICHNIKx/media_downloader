@@ -7,6 +7,7 @@ import {
   cancelDownloadButtonElement,
   downloaderState,
   initialPlaylistUrl,
+  initialFilename,
   initialOutputMode,
   isEmbedMode,
   initialSite,
@@ -104,6 +105,51 @@ async function initializeHlsDownloader() {
 
     const playlistResource = await fetchHlsPlaylistResourceWithFallback(initialPlaylistUrl);
     downloaderState.expectedDurationMs = Number(playlistResource.durationMs || 0) || 0;
+
+    if (playlistResource.kind === "direct" && playlistResource.directUrl) {
+      const directExtension = playlistResource.directExtension || ".mp3";
+      const directMimeType = playlistResource.directMimeType || "audio/mpeg";
+
+      sourceUrlElement.textContent = playlistResource.resolvedFrom
+        ? `${playlistResource.resolvedFrom}\n→ ${playlistResource.directUrl}`
+        : playlistResource.directUrl;
+
+      downloaderState.loadedMasterVariants = [];
+
+      downloaderState.preparedDownload = {
+        kind: "direct",
+        directUrl: playlistResource.directUrl,
+        directExtension,
+        directMimeType,
+        outputFilename: initialFilename.replace(/\.m3u8$/i, directExtension),
+        outputInfo: {
+          mimeType: directMimeType,
+          extension: directExtension.replace(/^\./, "")
+        },
+        expectedDurationMs: downloaderState.expectedDurationMs || 0
+      };
+
+      renderSinglePlaylistOption();
+      setControlsVisible(true);
+      setOutputModeAvailable(false);
+
+      setDetails(
+        [
+          "SoundCloud fresh resolve: direct/progressive audio",
+          `Direct URL: ${playlistResource.directUrl}`,
+          `Тип: ${directMimeType}`,
+          `Имя файла: ${downloaderState.preparedDownload.outputFilename}`,
+          ""
+        ].join("\n")
+      );
+
+      setStatus("Готово к скачиванию direct audio.");
+      setProgress(0);
+      setDownloadUiState(false);
+
+      maybeAutoStartForSite();
+      return;
+    }
 
     sourceUrlElement.textContent = playlistResource.resolvedFrom
       ? `${playlistResource.resolvedFrom}\n→ ${playlistResource.playlistUrl}`

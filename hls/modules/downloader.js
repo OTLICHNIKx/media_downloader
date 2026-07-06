@@ -204,6 +204,31 @@ async function downloadBlob(blob, filename) {
   );
 }
 
+async function downloadDirectAudio(prepared, abortController) {
+  setStatus("Загружаю direct audio...");
+  setProgress(10);
+
+  const directBuffer = await fetchArrayBuffer(prepared.directUrl, {
+    signal: abortController.signal,
+    label: "direct audio"
+  });
+
+  setProgress(85);
+
+  const extension = prepared.directExtension || ".mp3";
+  const mimeType = prepared.directMimeType || "audio/mpeg";
+
+  const blob = new Blob([directBuffer], {
+    type: mimeType
+  });
+
+  const filename =
+    prepared.outputFilename ||
+    `soundcloud-track${extension}`;
+
+  await downloadBlob(blob, filename);
+}
+
 async function finalizeOutput(blob, prepared) {
   const originalFilename = prepared.outputFilename;
 
@@ -432,12 +457,22 @@ async function downloadSegmentsInParallel(segmentUrls, abortController, onSegmen
 }
 
 export async function startPreparedDownload() {
-  if (!downloaderState.preparedDownload || downloaderState.currentDownloadAbortController) return;
+  if (
+    !downloaderState.preparedDownload ||
+    downloaderState.currentDownloadAbortController
+  ) {
+    return;
+  }
+
+  let prepared = downloaderState.preparedDownload;
+
+  if (!prepared) {
+    setStatus("Ошибка: media playlist не подготовлен.");
+    return;
+  }
 
   const abortController = new AbortController();
   downloaderState.currentDownloadAbortController = abortController;
-
-  let prepared = downloaderState.preparedDownload;
 
   const buffers = [];
   let downloadedBytes = 0;
@@ -446,18 +481,66 @@ export async function startPreparedDownload() {
   setDownloadUiState(true);
   setProgress(3);
 
-  if (prepared.expectedDurationMs) {
-    setStatus("Проверяю полноту HLS playlist...");
-
-    prepared = await waitForCompletePreparedPlaylist(
-      prepared,
-      abortController
-    );
-
-    downloaderState.preparedDownload = prepared;
-  }
-
   try {
+    if (prepared.kind === "direct" && prepared.directUrl) {
+      setStatus("Загружаю direct audio...");
+      setProgress(10);
+
+      const directBuffer = await fetchArrayBuffer(prepared.directUrl, {
+        signal: abortController.signal,
+        label: "direct audio"
+      });
+
+      downloadedBytes = directBuffer.byteLength;
+      setProgress(90);
+
+      const directExtension = prepared.directExtension || ".mp3";
+      const directMimeType = prepared.directMimeType || "audio/mpeg";
+
+      const blob = new Blob([directBuffer], {
+        type: directMimeType
+      });
+
+      const filename =
+        prepared.outputFilename ||
+        `soundcloud-track${directExtension}`;
+
+      setDetails(
+        [
+          "SoundCloud direct/progressive audio",
+          `Имя файла: ${filename}`,
+          `Размер: ${formatBytes(blob.size)}`,
+          `Тип: ${directMimeType}`
+        ].join("\n")
+      );
+
+      const directPrepared = {
+        ...prepared,
+        outputInfo: {
+          ...(prepared.outputInfo || {}),
+          mimeType: directMimeType,
+          extension: directExtension.replace(/^\./, "")
+        }
+      };
+
+      setStatus("Собираю файл...");
+      setProgress(95);
+
+      await downloadBlob(blob, filename);
+      return;
+    }
+
+    if (prepared.expectedDurationMs) {
+      setStatus("Проверяю полноту HLS playlist...");
+
+      prepared = await waitForCompletePreparedPlaylist(
+        prepared,
+        abortController
+      );
+
+      downloaderState.preparedDownload = prepared;
+    }
+
     if (prepared.initMapUrl) {
       setStatus("Загружаю init segment...");
 
@@ -484,10 +567,15 @@ export async function startPreparedDownload() {
       (index, buffer) => {
         downloadedSegments += 1;
         downloadedBytes += buffer.byteLength;
+
         setStatus(
           `Загружено сегментов: ${downloadedSegments} из ${prepared.segmentUrls.length}`
         );
-        setProgress(10 + (downloadedSegments / prepared.segmentUrls.length) * 80);
+
+        setProgress(
+          10 + (downloadedSegments / prepared.segmentUrls.length) * 80
+        );
+
         renderDownloadProgress(prepared, downloadedSegments, downloadedBytes);
       }
     );
@@ -519,7 +607,10 @@ export async function startPreparedDownload() {
     }
 
     console.error("[HLS Downloader]", error);
-    const errorMessage = error?.message || String(error) || "Неизвестная ошибка";
+
+    const errorMessage =
+      error?.message || String(error) || "Неизвестная ошибка";
+
     setStatus(`Ошибка: ${errorMessage}`);
   } finally {
     downloaderState.currentDownloadAbortController = null;

@@ -77,17 +77,37 @@ function resolveSoundCloudTrackHlsFresh() {
       initialSoundCloudTrackId ||
       getSoundCloudTrackIdFromUrl(initialSoundCloudApiUrl);
 
-    const clientId = getQueryParamFromUrl(initialSoundCloudApiUrl, "client_id");
+    const permalinkUrl = initialSoundCloudPermalinkUrl || "";
 
-    if (!trackId || !clientId) {
-      reject(new Error("Недостаточно данных для fresh SoundCloud resolve."));
+    const clientId =
+      initialSoundCloudClientId ||
+      getQueryParamFromUrl(initialSoundCloudApiUrl, "client_id");
+
+    if (!clientId) {
+      reject(new Error("client_id не найден для fresh SoundCloud resolve."));
       return;
     }
+
+    if (!trackId && !permalinkUrl) {
+      reject(
+        new Error(
+          "Недостаточно данных для fresh SoundCloud resolve: нет trackId/permalinkUrl."
+        )
+      );
+      return;
+    }
+
+    console.log("[HLS Downloader] SoundCloud fresh resolve request:", {
+      trackId,
+      permalinkUrl,
+      hasClientId: Boolean(clientId)
+    });
 
     chrome.runtime.sendMessage(
       {
         type: "RESOLVE_TRACK_HLS",
         trackId,
+        permalinkUrl,
         clientId
       },
       (response) => {
@@ -101,16 +121,42 @@ function resolveSoundCloudTrackHlsFresh() {
           return;
         }
 
+        if (response.kind === "direct" && response.directUrl) {
+          console.log("[HLS Downloader] SoundCloud fresh direct resolve success:", {
+            directUrl: response.directUrl,
+            directExtension: response.directExtension || "",
+            directMimeType: response.directMimeType || "",
+            durationMs: response.durationMs || 0
+          });
+
+          resolve({
+            kind: "direct",
+            directUrl: response.directUrl,
+            directExtension: response.directExtension || ".mp3",
+            directMimeType: response.directMimeType || "audio/mpeg",
+            resolvedFrom: "soundcloud-fresh-resolve",
+            durationMs: response.durationMs || 0
+          });
+
+          return;
+        }
+
         if (response.kind !== "hls") {
           reject(
             new Error(
-              `SoundCloud вернул не-HLS поток: ${response.kind || "unknown"}`
+              `SoundCloud вернул неподдерживаемый поток: ${response.kind || "unknown"}`
             )
           );
           return;
         }
 
+        console.log("[HLS Downloader] SoundCloud fresh HLS resolve success:", {
+          playlistUrl: response.playlistUrl,
+          durationMs: response.durationMs || 0
+        });
+
         resolve({
+          kind: "hls",
           playlistUrl: response.playlistUrl,
           playlistText: response.playlistText,
           resolvedFrom: "soundcloud-fresh-resolve",

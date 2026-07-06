@@ -40,29 +40,29 @@ function injectSetsStyles() {
       bottom: 20px !important;
       right: 20px !important;
       z-index: 2147483647 !important;
-
+    
       display: inline-flex !important;
       align-items: center !important;
       gap: 8px !important;
-
+    
       padding: 12px 20px !important;
       border: none !important;
       border-radius: 999px !important;
-      background: #ff5500 !important;
+      background: #16a34a !important;
       color: #ffffff !important;
-
+    
       font-family: Arial, sans-serif !important;
       font-size: 14px !important;
       font-weight: 700 !important;
       line-height: 1 !important;
-
+    
       cursor: pointer !important;
-      box-shadow: 0 4px 14px rgba(255, 85, 0, 0.4) !important;
+      box-shadow: 0 4px 14px rgba(22, 163, 74, 0.4) !important;
       transition: background 0.18s ease, transform 0.12s ease !important;
     }
-
+    
     .media-downloader-sets-button:hover {
-      background: #e64a00 !important;
+      background: #15803d !important;
       transform: translateY(-1px) !important;
     }
 

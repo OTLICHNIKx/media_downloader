@@ -241,12 +241,12 @@ function injectStyles() {
     }
 
     .media-downloader-track-button {
-  position: absolute !important;
-  top: 10px !important;
-  right: 10px !important;
-  margin-left: 0 !important;
-  z-index: 30 !important;
-}
+      position: absolute !important;
+      top: 10px !important;
+      right: 10px !important;
+      margin-left: 0 !important;
+      z-index: 30 !important;
+    }
 
     .media-downloader-soundcloud-track-button {
       position: static !important;
@@ -262,7 +262,7 @@ function injectStyles() {
     
       border: none !important;
       border-radius: 4px !important;
-      background: #333333 !important;
+      background: #16a34a !important;
       color: #ffffff !important;
     
       display: inline-flex !important;
@@ -274,7 +274,7 @@ function injectStyles() {
     }
     
     .media-downloader-soundcloud-track-button:hover {
-      background: #ff5500 !important;
+      background: #15803d !important;
       color: #ffffff !important;
       padding: 0 !important;
       border-radius: 4px !important;

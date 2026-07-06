@@ -147,12 +147,84 @@ function getCurrentSiteMediaAdapter() {
   return null;
 }
 
+function isSoundCloudPlaylistPermalinkHref(href) {
+  if (!href || !window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return false;
+  }
+
+  try {
+    const url = new URL(href, window.location.href);
+
+    if (!url.hostname.toLowerCase().includes("soundcloud.com")) {
+      return false;
+    }
+
+    const parts = url.pathname
+      .split("/")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    return parts.length >= 3 && parts[1] === "sets" && Boolean(parts[2]);
+  } catch {
+    return false;
+  }
+}
+
+function getSoundCloudPlaylistLinkFromCandidate(candidateElement) {
+  if (!candidateElement || !(candidateElement instanceof Element)) {
+    return null;
+  }
+
+  const selectors = [
+    ".soundTitle__title[href*='/sets/']",
+    ".soundTitle__title a[href*='/sets/']",
+    "a[itemprop='url'][href*='/sets/']",
+    "a[href*='/sets/']"
+  ];
+
+  for (const selector of selectors) {
+    const link = candidateElement.querySelector(selector);
+
+    if (link && isSoundCloudPlaylistPermalinkHref(link.getAttribute("href") || "")) {
+      return link;
+    }
+  }
+
+  return null;
+}
+
+function isSoundCloudPlaylistCardCandidate(candidateElement) {
+  if (!candidateElement || !(candidateElement instanceof Element)) {
+    return false;
+  }
+
+  if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return false;
+  }
+
+  if (candidateElement.closest("[data-media-downloader-soundcloud-playlist-card]")) {
+    return true;
+  }
+
+  const outerCard =
+    candidateElement.closest(".sound") ||
+    candidateElement.closest(".soundList__item") ||
+    candidateElement.closest(".searchList__item") ||
+    candidateElement;
+
+  return Boolean(getSoundCloudPlaylistLinkFromCandidate(outerCard));
+}
+
 function isAdapterCandidateUseful(candidateElement) {
   if (!candidateElement || !(candidateElement instanceof Element)) {
     return false;
   }
 
   if (candidateElement.closest(`.${MEDIA_DOWNLOADER_ICON_CLASS}`)) {
+    return false;
+  }
+
+  if (isSoundCloudPlaylistCardCandidate(candidateElement)) {
     return false;
   }
 

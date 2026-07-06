@@ -11,6 +11,13 @@ function sanitizeSetsFilename(filename) {
     .trim();
 }
 
+const SETS_INLINE_BUTTON_CLASS = "media-downloader-inline-sets-button";
+const SETS_INLINE_CARD_ATTRIBUTE = "data-media-downloader-soundcloud-playlist-card";
+const SETS_INLINE_URL_ATTRIBUTE = "data-media-downloader-sets-url";
+
+const embeddedPlaylistInfoCache = new Map();
+const embeddedPlaylistResolveInFlight = new Set();
+
 const SETS_BUTTON_ID = "media-downloader-sets-button";
 const SETS_BUTTON_CLASS = "media-downloader-sets-button";
 const SETS_STYLES_ID = "media-downloader-sets-styles";
@@ -74,6 +81,50 @@ function injectSetsStyles() {
       opacity: 0.7 !important;
       cursor: default !important;
       transform: none !important;
+    }
+    
+        .media-downloader-inline-sets-button {
+      position: static !important;
+
+      height: 40px !important;
+      min-height: 40px !important;
+      max-height: 40px !important;
+
+      padding: 0 14px !important;
+      border: none !important;
+      border-radius: 4px !important;
+
+      background: #16a34a !important;
+      color: #ffffff !important;
+
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 6px !important;
+
+      font-family: Arial, sans-serif !important;
+      font-size: 13px !important;
+      font-weight: 700 !important;
+      line-height: 1 !important;
+      white-space: nowrap !important;
+
+      cursor: pointer !important;
+      vertical-align: top !important;
+      flex: 0 0 auto !important;
+    }
+
+    .media-downloader-inline-sets-button:hover {
+      background: #15803d !important;
+      color: #ffffff !important;
+    }
+
+    .media-downloader-inline-sets-button:disabled {
+      opacity: 0.72 !important;
+      cursor: default !important;
+    }
+
+    .media-downloader-ui-disabled .media-downloader-inline-sets-button {
+      display: none !important;
     }
 
     .media-downloader-ui-disabled .media-downloader-sets-button {
@@ -1393,6 +1444,407 @@ function openPlaylistDownloaderUrl(url) {
   });
 }
 
+function isSoundCloudPlaylistPermalinkUrl(url) {
+  try {
+    const parsedUrl = new URL(url, window.location.href);
+
+    if (!parsedUrl.hostname.toLowerCase().includes("soundcloud.com")) {
+      return false;
+    }
+
+    const parts = parsedUrl.pathname
+      .split("/")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    return parts.length >= 3 && parts[1] === "sets" && Boolean(parts[2]);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeSoundCloudPlaylistPermalinkUrl(url) {
+  const parsedUrl = new URL(url, window.location.href);
+  parsedUrl.hash = "";
+  parsedUrl.search = "";
+
+  return parsedUrl.href;
+}
+
+function getInlinePlaylistLinkFromCard(cardElement) {
+  if (!cardElement || !(cardElement instanceof Element)) {
+    return null;
+  }
+
+  const selectors = [
+    ".soundTitle__title[href*='/sets/']",
+    ".soundTitle__title a[href*='/sets/']",
+    "a[itemprop='url'][href*='/sets/']",
+    "a[href*='/sets/']"
+  ];
+
+  for (const selector of selectors) {
+    const links = cardElement.querySelectorAll(selector);
+
+    for (const link of links) {
+      const href = link.getAttribute("href") || "";
+
+      if (isSoundCloudPlaylistPermalinkUrl(href)) {
+        return link;
+      }
+    }
+  }
+
+  return null;
+}
+
+function getInlinePlaylistTitle(cardElement, playlistLink) {
+  const title =
+    cleanSetsText(playlistLink?.textContent || "") ||
+    cleanSetsText(
+      cardElement.querySelector(".soundTitle__title")?.textContent || ""
+    );
+
+  return title || "playlist";
+}
+
+function getInlinePlaylistAuthor(cardElement) {
+  return (
+    cleanAuthorName(cardElement.querySelector(".soundTitle__username")?.textContent || "") ||
+    cleanAuthorName(cardElement.querySelector(".soundTitle__usernameText")?.textContent || "") ||
+    cleanAuthorName(cardElement.querySelector(".userBadge__username")?.textContent || "") ||
+    ""
+  );
+}
+
+function getInlinePlaylistDomTrackCount(cardElement) {
+  if (!cardElement || !(cardElement instanceof Element)) {
+    return 0;
+  }
+
+  const rowSelectors = [
+    ".trackList .trackItem",
+    ".systemPlaylistTrackList .trackItem",
+    ".systemPlaylistTrackList__item",
+    ".playlist__tracks .trackItem",
+    ".listenDetails__trackList .trackItem"
+  ];
+
+  for (const selector of rowSelectors) {
+    const count = cardElement.querySelectorAll(selector).length;
+
+    if (count > 0) {
+      return count;
+    }
+  }
+
+  const text = cleanSetsText(cardElement.textContent || "");
+  const match =
+    text.match(/\b(\d+)\s+tracks?\b/i) ||
+    text.match(/\b(\d+)\s+трек/i);
+
+  return match && match[1] ? Number(match[1]) || 0 : 0;
+}
+
+function getInlinePlaylistActionsContainer(cardElement) {
+  if (!cardElement || !(cardElement instanceof Element)) {
+    return null;
+  }
+
+  const selectors = [
+    ".soundActions .sc-button-group",
+    ".soundActions",
+    ".sound__soundActions .sc-button-group",
+    ".sound__soundActions",
+    ".soundFooter .sc-button-group",
+    ".soundFooter",
+    ".listenEngagement__actions",
+    ".listenEngagement"
+  ];
+
+  for (const selector of selectors) {
+    const element = cardElement.querySelector(selector);
+
+    if (!element) continue;
+
+    const rect = element.getBoundingClientRect();
+
+    if (rect.width > 20 && rect.height > 20) {
+      return element;
+    }
+  }
+
+  return null;
+}
+
+function getInlinePlaylistButtonText(trackCount) {
+  return trackCount > 0
+    ? `Скачать плейлист (${trackCount})`
+    : "Скачать плейлист";
+}
+
+async function resolveInlinePlaylistInfo(permalinkUrl, fallbackInfo = {}) {
+  if (embeddedPlaylistInfoCache.has(permalinkUrl)) {
+    return embeddedPlaylistInfoCache.get(permalinkUrl);
+  }
+
+  const clientId = getClientId();
+
+  if (!clientId) {
+    throw new Error("client_id не найден");
+  }
+
+  const data = await fetchSoundCloudJson(
+    `https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(permalinkUrl)}` +
+      `&client_id=${encodeURIComponent(clientId)}`
+  );
+
+  if (data?.kind && data.kind !== "playlist") {
+    throw new Error(`SoundCloud resolve вернул не playlist: ${data.kind}`);
+  }
+
+  const tracks = Array.isArray(data?.tracks)
+    ? data.tracks.map(normalizePlaylistTrack).filter(Boolean)
+    : [];
+
+  const playlistInfo = {
+    playlistId: String(data?.id || data?.urn || fallbackInfo.playlistId || ""),
+    playlistUrn: data?.urn ? String(data.urn) : "",
+    trackCount:
+      Number(data?.track_count || data?.trackCount || fallbackInfo.trackCount || tracks.length) ||
+      tracks.length,
+    permalinkUrl: String(data?.permalink_url || data?.permalinkUrl || permalinkUrl),
+    playlistTitle: cleanSetsText(data?.title || fallbackInfo.playlistTitle || "playlist"),
+    playlistAuthor: cleanAuthorName(data?.user?.username || fallbackInfo.playlistAuthor || ""),
+    tracks
+  };
+
+  embeddedPlaylistInfoCache.set(permalinkUrl, playlistInfo);
+
+  return playlistInfo;
+}
+
+async function openInlinePlaylistDownloader(playlistInfo) {
+  const clientId = getClientId();
+
+  if (!clientId) {
+    throw new Error("client_id не найден");
+  }
+
+  const resolvedInfo = playlistInfo.playlistId
+    ? playlistInfo
+    : await resolveInlinePlaylistInfo(playlistInfo.permalinkUrl, playlistInfo);
+
+  let tracks = null;
+
+  if (resolvedInfo.playlistId) {
+    tracks = await fetchFullPlaylistTracks(resolvedInfo);
+  }
+
+  if ((!tracks || tracks.length === 0) && resolvedInfo.tracks?.length > 0) {
+    tracks = resolvedInfo.tracks;
+  }
+
+  if (!tracks || tracks.length === 0) {
+    throw new Error("Треки плейлиста не найдены");
+  }
+
+  const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const storageKey = `playlistBatch:${batchId}`;
+  const playlistIndexWidth = Math.max(2, String(tracks.length).length);
+
+  const batchTracks = tracks.map((track, index) => ({
+    playlistIndex: index + 1,
+    playlistIndexWidth,
+    trackId: track.trackId || "",
+    trackUrn: track.trackUrn || "",
+    title: track.title || "",
+    author: track.author || "",
+    permalinkUrl: track.permalinkUrl || "",
+    durationMs: track.durationMs || 0,
+    availabilityReason: track.availabilityReason || ""
+  }));
+
+  await setChromeStorageLocal({
+    [storageKey]: {
+      tracks: batchTracks,
+      playlistTitle: resolvedInfo.playlistTitle || playlistInfo.playlistTitle || "playlist",
+      playlistAuthor: resolvedInfo.playlistAuthor || playlistInfo.playlistAuthor || "",
+      clientId,
+      createdAt: Date.now()
+    }
+  });
+
+  const downloaderUrl = chrome.runtime.getURL(
+    `playlist-downloader/playlist-downloader.html?batchId=${encodeURIComponent(batchId)}`
+  );
+
+  await openPlaylistDownloaderUrl(downloaderUrl);
+
+  return tracks.length;
+}
+
+function warmUpInlinePlaylistInfo(permalinkUrl, fallbackInfo, button) {
+  if (!permalinkUrl || embeddedPlaylistInfoCache.has(permalinkUrl)) {
+    const cached = embeddedPlaylistInfoCache.get(permalinkUrl);
+
+    if (cached && button) {
+      button.textContent = getInlinePlaylistButtonText(cached.trackCount);
+    }
+
+    return;
+  }
+
+  if (embeddedPlaylistResolveInFlight.has(permalinkUrl)) {
+    return;
+  }
+
+  embeddedPlaylistResolveInFlight.add(permalinkUrl);
+
+  resolveInlinePlaylistInfo(permalinkUrl, fallbackInfo)
+    .then((playlistInfo) => {
+      if (!button || !document.documentElement.contains(button)) return;
+
+      button.textContent = getInlinePlaylistButtonText(playlistInfo.trackCount);
+    })
+    .catch((error) => {
+      console.warn(
+        "[Media Downloader] Sets: inline playlist resolve failed:",
+        error?.message || error
+      );
+    })
+    .finally(() => {
+      embeddedPlaylistResolveInFlight.delete(permalinkUrl);
+    });
+}
+
+function upsertInlinePlaylistButton(cardElement, playlistInfo) {
+  const actionsContainer = getInlinePlaylistActionsContainer(cardElement);
+
+  if (!actionsContainer) {
+    scheduleSetsScan(500);
+    return;
+  }
+
+  let button = cardElement.querySelector(`.${SETS_INLINE_BUTTON_CLASS}`);
+
+  if (
+    button &&
+    button.getAttribute(SETS_INLINE_URL_ATTRIBUTE) !== playlistInfo.permalinkUrl
+  ) {
+    button.remove();
+    button = null;
+  }
+
+  if (!button) {
+    button = document.createElement("button");
+    button.type = "button";
+    button.className = SETS_INLINE_BUTTON_CLASS;
+    button.setAttribute(SETS_INLINE_URL_ATTRIBUTE, playlistInfo.permalinkUrl);
+    button.title = "Скачать все треки этого плейлиста в MP3 и упаковать в ZIP";
+
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      button.disabled = true;
+      button.textContent = "Собираю плейлист...";
+
+      try {
+        const count = await openInlinePlaylistDownloader(playlistInfo);
+
+        button.textContent = `Открыт загрузчик (${count})`;
+      } catch (error) {
+        console.warn(
+          "[Media Downloader] Sets: inline playlist download failed:",
+          error?.message || error
+        );
+
+        button.textContent = "Ошибка плейлиста";
+
+        setTimeout(() => {
+          button.disabled = false;
+          button.textContent = getInlinePlaylistButtonText(playlistInfo.trackCount);
+        }, 1800);
+
+        return;
+      }
+
+      setTimeout(() => {
+        button.disabled = false;
+        button.textContent = getInlinePlaylistButtonText(playlistInfo.trackCount);
+      }, 1800);
+    });
+
+    actionsContainer.appendChild(button);
+  }
+
+  button.textContent = getInlinePlaylistButtonText(playlistInfo.trackCount);
+
+  warmUpInlinePlaylistInfo(playlistInfo.permalinkUrl, playlistInfo, button);
+}
+
+function scanInlineSoundCloudPlaylistCards() {
+  if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return;
+  }
+
+  const cards = document.querySelectorAll(
+    [
+      ".sound",
+      ".soundList__item",
+      ".searchList__item"
+    ].join(",")
+  );
+
+  cards.forEach((cardElement) => {
+    const playlistLink = getInlinePlaylistLinkFromCard(cardElement);
+
+    if (!playlistLink) {
+      return;
+    }
+
+    const permalinkUrl = normalizeSoundCloudPlaylistPermalinkUrl(
+      playlistLink.getAttribute("href") || ""
+    );
+
+    if (!isSoundCloudPlaylistPermalinkUrl(permalinkUrl)) {
+      return;
+    }
+
+    // Если мы уже на самой странице этого плейлиста, там живёт плавающая кнопка.
+    // Встроенную кнопку на эту же карточку не дублируем.
+    if (
+      isSoundCloudSetsPage() &&
+      getSoundCloudComparablePath(permalinkUrl) === getCurrentSetsPageKey()
+    ) {
+      return;
+    }
+
+    cardElement.setAttribute(SETS_INLINE_CARD_ATTRIBUTE, "true");
+
+    // Если раньше эта карточка ошибочно получила solo-кнопку,
+    // убираем её: вместо неё будет кнопка плейлиста.
+    cardElement
+      .querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`)
+      .forEach((element) => element.remove());
+
+    const domCount = getInlinePlaylistDomTrackCount(cardElement);
+
+    const playlistInfo = {
+      playlistId: "",
+      playlistUrn: "",
+      trackCount: domCount,
+      permalinkUrl,
+      playlistTitle: getInlinePlaylistTitle(cardElement, playlistLink),
+      playlistAuthor: getInlinePlaylistAuthor(cardElement),
+      tracks: []
+    };
+
+    upsertInlinePlaylistButton(cardElement, playlistInfo);
+  });
+}
+
 function createSetsButton(trackCount) {
   const pageKey = getCurrentSetsPageKey();
   const button = document.getElementById(SETS_BUTTON_ID);
@@ -1660,11 +2112,13 @@ function initSoundCloudSetsButton() {
   injectSetsStyles();
   installSetsSpaNavigationHooks();
   runSetsScanSafely();
+  scanInlineSoundCloudPlaylistCards();
 
   // MutationObserver — реагируем на ре-рендер карточек Ember'ом.
   const observer = new MutationObserver(() => {
     handleSetsSpaNavigation();
     scheduleSetsScan(400);
+    scanInlineSoundCloudPlaylistCards();
   });
 
   observer.observe(document.documentElement, {
@@ -1677,6 +2131,7 @@ function initSoundCloudSetsButton() {
   setInterval(() => {
     handleSetsSpaNavigation();
     scheduleSetsScan(800);
+    scanInlineSoundCloudPlaylistCards();
   }, 3000);
 }
 

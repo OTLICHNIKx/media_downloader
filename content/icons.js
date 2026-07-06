@@ -235,11 +235,6 @@ function injectStyles() {
       position: relative;
     }
 
-    [data-media-downloader-capturing="true"] {
-      outline: 1px dashed rgba(31, 157, 85, 0.35);
-      outline-offset: 3px;
-    }
-
     .media-downloader-track-button {
       position: absolute !important;
       top: 10px !important;

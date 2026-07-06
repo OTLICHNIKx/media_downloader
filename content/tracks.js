@@ -160,15 +160,19 @@ function getSoundCloudTrackIdFromTrackElement(trackElement) {
 function getSoundCloudTrackPermalinkFromTrackElement(trackElement) {
   if (!trackElement || !(trackElement instanceof Element)) return "";
 
+  const storedPermalink =
+    trackElement.getAttribute("data-media-downloader-track-permalink") || "";
+
+  if (storedPermalink) {
+    return storedPermalink;
+  }
+
   const selectors = [
     ".soundTitle__title[href]",
     ".soundTitle__title a[href]",
     ".trackItem__trackTitle[href]",
     ".trackItem__trackTitle a[href]",
     "a[itemprop='url'][href]",
-
-    // Fallback для новых SoundCloud карточек:
-    // часто трек лежит как /artist/track-slug, а не /tracks/123.
     "a[href^='/'][href]",
     "a[href*='soundcloud.com/'][href]"
   ];
@@ -197,7 +201,6 @@ function getSoundCloudTrackPermalinkFromTrackElement(trackElement) {
           .map((part) => part.trim())
           .filter(Boolean);
 
-        // Трековый permalink SoundCloud обычно: /artist/track-slug.
         if (parts.length !== 2) continue;
 
         const [userSlug, trackSlug] = parts;
@@ -482,10 +485,16 @@ function removeSoloButtonFromSoundCloudPlaylistCard(trackElement) {
       `.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
     )
     .forEach((element) => {
-      // Кнопку плейлиста не трогаем, удаляем только solo download icon.
-      if (!element.classList.contains("media-downloader-inline-sets-button")) {
-        element.remove();
+      // Не удаляем solo-кнопки внутри строк плейлиста.
+      if (
+        element.closest(
+          ".trackItem, .systemPlaylistTrackList__item, .compactTrackList__item"
+        )
+      ) {
+        return;
       }
+
+      element.remove();
     });
 }
 
@@ -1064,6 +1073,11 @@ function maybeResolveMissingSoloSoundCloudButton(trackElement) {
   if (failedAt && Date.now() - failedAt < 30000) return;
 
   if (!isSoundCloudTrackNearViewport(trackElement)) return;
+
+  console.log("[Media Downloader] Solo SoundCloud API resolve queued:", {
+    trackKey,
+    title: getTrackTitle(trackElement)
+  });
 
   soloSoundCloudResolveInFlight.add(trackKey);
 

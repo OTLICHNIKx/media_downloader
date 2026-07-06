@@ -2201,8 +2201,29 @@ function getInlinePlaylistTrackLinkFromRow(rowElement) {
         continue;
       }
 
-      if (isSoundCloudTrackPermalinkUrl(href)) {
-        return link;
+      try {
+        const url = new URL(href, window.location.href);
+
+        url.hash = "";
+        url.search = "";
+
+        const parts = url.pathname
+          .split("/")
+          .map((part) => part.trim())
+          .filter(Boolean);
+
+        // SoundCloud track permalink: /artist/track-slug
+        if (
+          url.hostname.toLowerCase().includes("soundcloud.com") &&
+          parts.length === 2 &&
+          parts[0] &&
+          parts[1] &&
+          parts[1] !== "sets"
+        ) {
+          return link;
+        }
+      } catch {
+        // ignore
       }
     }
   }
@@ -2235,8 +2256,28 @@ function markInlinePlaylistTrackRowsForSoloDownload(cardElement) {
       return;
     }
 
+    let permalinkUrl = "";
+
+    try {
+      const parsedUrl = new URL(
+        trackLink.getAttribute("href") || "",
+        window.location.href
+      );
+
+      parsedUrl.hash = "";
+      parsedUrl.search = "";
+      permalinkUrl = parsedUrl.href;
+    } catch {
+      permalinkUrl = "";
+    }
+
+    if (!permalinkUrl) {
+      return;
+    }
+
     rowElement.setAttribute("data-media-downloader-track", "true");
     rowElement.setAttribute("data-media-downloader-inline-playlist-track-row", "true");
+    rowElement.setAttribute("data-media-downloader-track-permalink", permalinkUrl);
     rowElement.setAttribute(TRACK_TITLE_ATTRIBUTE, title);
     rowElement.setAttribute(TRACK_AUTHOR_ATTRIBUTE, getInlinePlaylistAuthor(cardElement));
     rowElement.setAttribute(TRACK_ADAPTER_ATTRIBUTE, "soundcloud");
@@ -2245,6 +2286,10 @@ function markInlinePlaylistTrackRowsForSoloDownload(cardElement) {
   });
 
   if (markedCount > 0) {
+    console.log(
+      `[Media Downloader] Sets: inline playlist rows marked for solo download: ${markedCount}`
+    );
+
     if (typeof restoreTrackButtonsIfMissing === "function") {
       setTimeout(() => {
         restoreTrackButtonsIfMissing();
@@ -2253,6 +2298,10 @@ function markInlinePlaylistTrackRowsForSoloDownload(cardElement) {
       setTimeout(() => {
         restoreTrackButtonsIfMissing();
       }, 700);
+
+      setTimeout(() => {
+        restoreTrackButtonsIfMissing();
+      }, 1600);
     }
 
     if (typeof scheduleMediaDownloaderScan === "function") {

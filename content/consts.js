@@ -7,6 +7,7 @@ const TRACK_BOUND_ATTRIBUTE = "data-media-downloader-track-bound";
 const TRACK_TITLE_ATTRIBUTE = "data-media-title";
 const TRACK_AUTHOR_ATTRIBUTE = "data-media-author";
 const TRACK_ADAPTER_ATTRIBUTE = "data-media-downloader-adapter";
+const TRACK_PERMALINK_ATTRIBUTE = "data-media-downloader-track-permalink";
 
 const MEDIA_DOWNLOADER_ICON_CLASS = "media-downloader-icon";
 const MEDIA_DOWNLOADER_URL_ATTRIBUTE = "data-media-downloader-url";

@@ -409,30 +409,7 @@ function isSoundCloudPlaylistPermalinkForSoloSkip(href) {
 }
 
 function isSoundCloudPlaylistInnerTrackRow(trackElement) {
-  if (!trackElement || !(trackElement instanceof Element)) {
-    return false;
-  }
-
-  if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
-    return false;
-  }
-
-  if (trackElement.hasAttribute("data-media-downloader-inline-playlist-track-row")) {
-    return true;
-  }
-
-  return Boolean(
-    trackElement.closest("[data-media-downloader-soundcloud-playlist-card]") &&
-      trackElement.closest(
-        [
-          ".trackItem",
-          ".systemPlaylistTrackList__item",
-          ".compactTrackList__item",
-          ".playlist__tracks .trackItem",
-          ".listenDetails__trackList .trackItem"
-        ].join(",")
-      )
-  );
+  return false;
 }
 
 function isSoundCloudPlaylistCardForSoloSkip(trackElement) {
@@ -441,12 +418,6 @@ function isSoundCloudPlaylistCardForSoloSkip(trackElement) {
   }
 
   if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
-    return false;
-  }
-
-  // Внутренние строки треков плейлиста НЕ блокируем:
-  // на них как раз нужна отдельная solo-кнопка.
-  if (isSoundCloudPlaylistInnerTrackRow(trackElement)) {
     return false;
   }
 
@@ -485,15 +456,6 @@ function removeSoloButtonFromSoundCloudPlaylistCard(trackElement) {
       `.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
     )
     .forEach((element) => {
-      // Не удаляем solo-кнопки внутри строк плейлиста.
-      if (
-        element.closest(
-          ".trackItem, .systemPlaylistTrackList__item, .compactTrackList__item"
-        )
-      ) {
-        return;
-      }
-
       element.remove();
     });
 }

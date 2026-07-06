@@ -379,17 +379,94 @@ function getBoundMediaItemForTrackElement(trackElement) {
   return mediaDownloaderTrackBindings.get(trackKey) || null;
 }
 
+function isSoundCloudTrackButtonContext(trackElement) {
+  return (
+    window.location.hostname.toLowerCase().includes("soundcloud.com") ||
+    trackElement?.getAttribute(TRACK_ADAPTER_ATTRIBUTE) === "soundcloud"
+  );
+}
+
+function isUsableSoundCloudActionsContainer(element) {
+  if (!element || !(element instanceof Element)) return false;
+
+  const rect = element.getBoundingClientRect();
+
+  return rect.width > 20 && rect.height > 20;
+}
+
+function getSoundCloudTrackActionsContainer(trackElement) {
+  if (!trackElement || !(trackElement instanceof Element)) {
+    return null;
+  }
+
+  const selectors = [
+    ".soundActions .sc-button-group",
+    ".soundActions",
+    ".sound__soundActions .sc-button-group",
+    ".sound__soundActions",
+    ".soundFooter .sc-button-group",
+    ".soundFooter",
+    ".trackItem__actions",
+    ".trackItem__additional",
+    ".listenEngagement__actions",
+    ".listenEngagement"
+  ];
+
+  for (const selector of selectors) {
+    if (
+      trackElement.matches(selector) &&
+      isUsableSoundCloudActionsContainer(trackElement)
+    ) {
+      return trackElement;
+    }
+
+    const element = trackElement.querySelector(selector);
+
+    if (isUsableSoundCloudActionsContainer(element)) {
+      return element;
+    }
+  }
+
+  return null;
+}
+
+function scheduleSoundCloudTrackButtonRetry() {
+  if (typeof scheduleMediaDownloaderScan === "function") {
+    scheduleMediaDownloaderScan(500);
+  }
+}
+
 function addIconOnTrackElement(trackElement, mediaItem) {
   if (!trackElement || !mediaItem) return;
 
+  const isSoundCloud = isSoundCloudTrackButtonContext(trackElement);
+  const targetContainer = isSoundCloud
+    ? getSoundCloudTrackActionsContainer(trackElement)
+    : trackElement;
+
+  // На SoundCloud нельзя падать в absolute/generic overlay.
+  // Если action bar ещё не дорисован Ember'ом — ждём следующий scan.
+  if (isSoundCloud && !targetContainer) {
+    scheduleSoundCloudTrackButtonRetry();
+    return;
+  }
+
   const existingIcon = trackElement.querySelector(
-    `:scope > .${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
+    `.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
   );
 
   const nextFallbackId = mediaItem.soundCloudFallbackPlaylistId || "";
+  const existingIsCorrectSoundCloudButton =
+    !isSoundCloud ||
+    (
+      existingIcon &&
+      existingIcon.classList.contains("media-downloader-soundcloud-track-button") &&
+      targetContainer.contains(existingIcon)
+    );
 
   if (
     existingIcon &&
+    existingIsCorrectSoundCloudButton &&
     existingIcon.getAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE) === mediaItem.url &&
     (existingIcon.getAttribute(MEDIA_DOWNLOADER_FALLBACK_ATTRIBUTE) || "") === nextFallbackId
   ) {
@@ -400,20 +477,30 @@ function addIconOnTrackElement(trackElement, mediaItem) {
     existingIcon.remove();
   }
 
-  const computedStyle = window.getComputedStyle(trackElement);
-  if (computedStyle.position === "static") {
-    trackElement.style.position = "relative";
+  if (!isSoundCloud) {
+    const computedStyle = window.getComputedStyle(trackElement);
+    if (computedStyle.position === "static") {
+      trackElement.style.position = "relative";
+    }
   }
 
   const icon = createDownloadIcon(mediaItem);
+
   icon.classList.add("media-downloader-track-button");
+
+  if (isSoundCloud) {
+    icon.classList.add("media-downloader-soundcloud-track-button");
+  }
+
   icon.setAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE, mediaItem.url);
+
   if (mediaItem.soundCloudFallbackPlaylistId) {
     icon.setAttribute(MEDIA_DOWNLOADER_FALLBACK_ATTRIBUTE, mediaItem.soundCloudFallbackPlaylistId);
   }
+
   icon.setAttribute(TRACK_STREAM_TYPE_ATTRIBUTE, mediaItem.streamType || mediaItem.extension);
 
-  trackElement.appendChild(icon);
+  targetContainer.appendChild(icon);
 
   trackElement.setAttribute(TRACK_BOUND_ATTRIBUTE, "true");
   trackElement.setAttribute(TRACK_STREAM_URL_ATTRIBUTE, mediaItem.url);
@@ -522,11 +609,20 @@ function restoreTrackButtonsIfMissing() {
   if (mediaDownloaderTrackBindings.size === 0) return;
 
   document.querySelectorAll("[data-media-downloader-track]").forEach((trackElement) => {
-    // Пропускаем карточки с уже существующей кнопкой
     const existingIcon = trackElement.querySelector(
-      `:scope > .${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
+      `.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
     );
-    if (existingIcon) return;
+
+    if (existingIcon) {
+      if (
+        isSoundCloudTrackButtonContext(trackElement) &&
+        !existingIcon.classList.contains("media-downloader-soundcloud-track-button")
+      ) {
+        existingIcon.remove();
+      } else {
+        return;
+      }
+    }
 
     const boundItem = getBoundMediaItemForTrackElement(trackElement);
     if (!boundItem) return;

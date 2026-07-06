@@ -218,12 +218,39 @@ function reportScanDiagnostics(stats, adapter) {
   }
 }
 
+function cleanupSoundCloudGenericButtons() {
+  if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return;
+  }
+
+  // На SoundCloud не должны жить generic audio/video/link-кнопки.
+  // Оставляем только кнопки, привязанные к трек-карточкам.
+  document
+    .querySelectorAll(
+      `.${MEDIA_DOWNLOADER_ICON_CLASS}:not(.media-downloader-track-button)`
+    )
+    .forEach((element) => {
+      element.remove();
+    });
+
+  document.querySelectorAll(`[${ICON_ADDED_ATTRIBUTE}]`).forEach((element) => {
+    element.removeAttribute(ICON_ADDED_ATTRIBUTE);
+    element.classList.remove("media-downloader-audio-with-button");
+  });
+}
+
 function scanAndAddIcons() {
   injectStyles();
   cleanupBrokenDownloaderMarks();
 
   const adapter = getCurrentSiteMediaAdapter();
+  const isSoundCloud = adapter?.name === "soundcloud";
+
   applyMediaMetadataAdapters();
+
+  if (isSoundCloud) {
+    cleanupSoundCloudGenericButtons();
+  }
 
   const stats = {
     host: window.location.hostname,
@@ -247,68 +274,71 @@ function scanAndAddIcons() {
     }
   }
 
-  document.querySelectorAll("a[href]").forEach((linkElement) => {
-    if (!isElementReallyVisible(linkElement)) return;
+  // SoundCloud streams ловим через capture по клику на трек.
+  // Generic a[href]/audio/video renderer на SoundCloud даёт большую белую
+  // кнопку в неправильном месте, поэтому для SoundCloud его отключаем.
+  if (!isSoundCloud) {
+    document.querySelectorAll("a[href]").forEach((linkElement) => {
+      if (!isElementReallyVisible(linkElement)) return;
 
-    stats.visibleLinks += 1;
+      stats.visibleLinks += 1;
 
-    const mediaItem = buildMediaItem(linkElement.getAttribute("href"), "inline-link");
-    if (!mediaItem) return;
+      const mediaItem = buildMediaItem(linkElement.getAttribute("href"), "inline-link");
+      if (!mediaItem) return;
 
-    stats.inlineLinkMediaFound += 1;
+      stats.inlineLinkMediaFound += 1;
 
-    addIconNearLink(linkElement, mediaItem);
-  });
+      addIconNearLink(linkElement, mediaItem);
+    });
 
-  document.querySelectorAll("audio, video").forEach((mediaElement) => {
-    if (!isElementReallyVisible(mediaElement)) return;
-
-    stats.visibleMediaElements += 1;
-
-    let mediaItem =
-      buildMediaItem(mediaElement.currentSrc, "inline-media-current-src") ||
-      buildMediaItem(mediaElement.getAttribute("src"), "inline-media-src");
-
-    if (!mediaItem) {
-      const sourceElement = mediaElement.querySelector("source[src]");
-      if (sourceElement) {
-        mediaItem = buildMediaItem(sourceElement.getAttribute("src"), "inline-source");
-      }
-    }
-
-    if (mediaItem) {
-      stats.inlineMediaFound += 1;
-      addIconOnMediaElement(mediaElement, mediaItem);
-      return;
-    }
-
-    if (mediaElement.hasAttribute(ICON_ADDED_ATTRIBUTE)) return;
-
-    const now = Date.now();
-    const lastHlsCheckAt = Number(mediaElement.dataset.mediaDownloaderLastHlsCheckAt || 0);
-
-    if (now - lastHlsCheckAt < 2000) return;
-
-    stats.latestHlsChecks += 1;
-    mediaElement.dataset.mediaDownloaderLastHlsCheckAt = String(now);
-
-    getLatestHlsStream((stream) => {
-      if (!stream || !stream.url) return;
-      if (mediaElement.hasAttribute(ICON_ADDED_ATTRIBUTE)) return;
+    document.querySelectorAll("audio, video").forEach((mediaElement) => {
       if (!isElementReallyVisible(mediaElement)) return;
 
-      const hlsItem = buildHlsMediaItem(stream.url, "latest-hls-stream");
+      stats.visibleMediaElements += 1;
 
-      if (!hlsItem) return;
+      let mediaItem =
+        buildMediaItem(mediaElement.currentSrc, "inline-media-current-src") ||
+        buildMediaItem(mediaElement.getAttribute("src"), "inline-media-src");
 
-      addIconOnMediaElement(mediaElement, hlsItem);
+      if (!mediaItem) {
+        const sourceElement = mediaElement.querySelector("source[src]");
+        if (sourceElement) {
+          mediaItem = buildMediaItem(sourceElement.getAttribute("src"), "inline-source");
+        }
+      }
+
+      if (mediaItem) {
+        stats.inlineMediaFound += 1;
+        addIconOnMediaElement(mediaElement, mediaItem);
+        return;
+      }
+
+      if (mediaElement.hasAttribute(ICON_ADDED_ATTRIBUTE)) return;
+
+      const now = Date.now();
+      const lastHlsCheckAt = Number(mediaElement.dataset.mediaDownloaderLastHlsCheckAt || 0);
+
+      if (now - lastHlsCheckAt < 2000) return;
+
+      stats.latestHlsChecks += 1;
+      mediaElement.dataset.mediaDownloaderLastHlsCheckAt = String(now);
+
+      getLatestHlsStream((stream) => {
+        if (!stream || !stream.url) return;
+        if (mediaElement.hasAttribute(ICON_ADDED_ATTRIBUTE)) return;
+        if (!isElementReallyVisible(mediaElement)) return;
+
+        const hlsItem = buildHlsMediaItem(stream.url, "latest-hls-stream");
+
+        if (!hlsItem) return;
+
+        addIconOnMediaElement(mediaElement, hlsItem);
+      });
     });
-  });
+  }
 
   stats.buttonsOnPage = document.querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}`).length;
 
-  // Восстанавливаем кнопки на трек-карточках, которые потеряли их
-  // из-за ре-рендера/виртуализации Ember (SoundCloud).
   restoreTrackButtonsIfMissing();
 
   reportScanDiagnostics(stats, adapter);

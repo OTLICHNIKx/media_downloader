@@ -241,11 +241,63 @@ function injectStyles() {
     }
 
     .media-downloader-track-button {
-      position: absolute !important;
-      top: 10px !important;
-      right: 10px !important;
-      margin-left: 0 !important;
-      z-index: 30 !important;
+  position: absolute !important;
+  top: 10px !important;
+  right: 10px !important;
+  margin-left: 0 !important;
+  z-index: 30 !important;
+}
+
+    .media-downloader-soundcloud-track-button {
+      position: static !important;
+      top: auto !important;
+      right: auto !important;
+    
+      width: 40px !important;
+      height: 40px !important;
+      min-width: 40px !important;
+    
+      margin: 0 0 0 8px !important;
+      padding: 0 !important;
+    
+      border: none !important;
+      border-radius: 4px !important;
+      background: #333333 !important;
+      color: #ffffff !important;
+    
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+    
+      vertical-align: top !important;
+      flex: 0 0 auto !important;
+    }
+    
+    .media-downloader-soundcloud-track-button:hover {
+      background: #ff5500 !important;
+      color: #ffffff !important;
+      padding: 0 !important;
+      border-radius: 4px !important;
+    }
+    
+    .media-downloader-soundcloud-track-button .md-icon-symbol {
+      width: 24px !important;
+      height: 24px !important;
+      min-width: 24px !important;
+      background: transparent !important;
+      border-radius: 0 !important;
+    }
+    
+    .media-downloader-soundcloud-track-button .md-icon-symbol svg {
+      width: 21px !important;
+      height: 21px !important;
+    }
+    
+    .media-downloader-soundcloud-track-button .md-icon-text,
+    .media-downloader-soundcloud-track-button:hover .md-icon-text {
+      display: none !important;
+      opacity: 0 !important;
+      max-width: 0 !important;
     }
   `;
 

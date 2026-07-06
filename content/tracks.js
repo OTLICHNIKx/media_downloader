@@ -308,6 +308,11 @@ function findTrackElementByTrackId(trackIdOrKey) {
 function startStreamCaptureForTrack(trackElement, reason = "interaction") {
   if (!trackElement) return;
 
+  if (isSoundCloudPlaylistCardForSoloSkip(trackElement)) {
+    removeSoloButtonFromSoundCloudPlaylistCard(trackElement);
+    return;
+  }
+
   const now = Date.now();
   const lastCaptureAt = Number(trackElement.dataset.mediaDownloaderLastCaptureAt || 0);
 
@@ -379,6 +384,78 @@ function getBoundMediaItemForTrackElement(trackElement) {
   return mediaDownloaderTrackBindings.get(trackKey) || null;
 }
 
+function isSoundCloudPlaylistPermalinkForSoloSkip(href) {
+  if (!href) return false;
+
+  try {
+    const url = new URL(href, window.location.href);
+
+    if (!url.hostname.toLowerCase().includes("soundcloud.com")) {
+      return false;
+    }
+
+    const parts = url.pathname
+      .split("/")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    return parts.length >= 3 && parts[1] === "sets" && Boolean(parts[2]);
+  } catch {
+    return false;
+  }
+}
+
+function isSoundCloudPlaylistCardForSoloSkip(trackElement) {
+  if (!trackElement || !(trackElement instanceof Element)) {
+    return false;
+  }
+
+  if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return false;
+  }
+
+  if (
+    trackElement.matches("[data-media-downloader-soundcloud-playlist-card]") ||
+    trackElement.closest("[data-media-downloader-soundcloud-playlist-card]")
+  ) {
+    return true;
+  }
+
+  const cardElement =
+    trackElement.closest(".sound") ||
+    trackElement.closest(".soundList__item") ||
+    trackElement.closest(".searchList__item") ||
+    trackElement;
+
+  const playlistLink = cardElement.querySelector("a[href*='/sets/']");
+
+  return isSoundCloudPlaylistPermalinkForSoloSkip(
+    playlistLink?.getAttribute("href") || ""
+  );
+}
+
+function removeSoloButtonFromSoundCloudPlaylistCard(trackElement) {
+  if (!trackElement || !(trackElement instanceof Element)) return;
+
+  const cardElement =
+    trackElement.closest("[data-media-downloader-soundcloud-playlist-card]") ||
+    trackElement.closest(".sound") ||
+    trackElement.closest(".soundList__item") ||
+    trackElement.closest(".searchList__item") ||
+    trackElement;
+
+  cardElement
+    .querySelectorAll(
+      `.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
+    )
+    .forEach((element) => {
+      // Кнопку плейлиста не трогаем, удаляем только solo download icon.
+      if (!element.classList.contains("media-downloader-inline-sets-button")) {
+        element.remove();
+      }
+    });
+}
+
 function isSoundCloudTrackButtonContext(trackElement) {
   return (
     window.location.hostname.toLowerCase().includes("soundcloud.com") ||
@@ -448,6 +525,11 @@ function addIconOnTrackElement(trackElement, mediaItem) {
   if (!trackElement || !mediaItem) return;
 
   const isSoundCloud = isSoundCloudTrackButtonContext(trackElement);
+
+  if (isSoundCloud && isSoundCloudPlaylistCardForSoloSkip(trackElement)) {
+    removeSoloButtonFromSoundCloudPlaylistCard(trackElement);
+    return;
+  }
 
   // ВАЖНО:
   // Сначала запоминаем stream binding, и только потом пытаемся вставить кнопку.
@@ -909,6 +991,11 @@ async function resolveSoloSoundCloudTrackMediaItemFromApi(trackElement) {
 function maybeResolveMissingSoloSoundCloudButton(trackElement) {
   if (!isSoundCloudTrackButtonContext(trackElement)) return;
 
+  if (isSoundCloudPlaylistCardForSoloSkip(trackElement)) {
+    removeSoloButtonFromSoundCloudPlaylistCard(trackElement);
+    return;
+  }
+
   const trackKey = getSoundCloudTrackKeyFromTrackElement(trackElement);
   if (!trackKey) return;
 
@@ -951,6 +1038,14 @@ function maybeResolveMissingSoloSoundCloudButton(trackElement) {
 // из-за ре-рендера/виртуализации SoundCloud. Вызывается после каждого скана.
 function restoreTrackButtonsIfMissing() {
   document.querySelectorAll("[data-media-downloader-track]").forEach((trackElement) => {
+    if (
+      isSoundCloudTrackButtonContext(trackElement) &&
+      isSoundCloudPlaylistCardForSoloSkip(trackElement)
+    ) {
+      removeSoloButtonFromSoundCloudPlaylistCard(trackElement);
+      return;
+    }
+
     const existingIcon = trackElement.querySelector(
       `.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
     );
@@ -973,9 +1068,6 @@ function restoreTrackButtonsIfMissing() {
       return;
     }
 
-    // После F5 SoundCloud иногда уже загрузил поток до того,
-    // как capture успел привязаться к карточке.
-    // Тогда восстанавливаем кнопку через api-v2 resolve по permalink.
     maybeResolveMissingSoloSoundCloudButton(trackElement);
   });
 }

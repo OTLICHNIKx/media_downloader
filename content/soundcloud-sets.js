@@ -1695,6 +1695,31 @@ function getInlinePlaylistAuthor(cardElement) {
   );
 }
 
+function parseInlinePlaylistTrackCountText(value) {
+  const text = cleanSetsText(value || "");
+
+  if (!text) {
+    return 0;
+  }
+
+  const patterns = [
+    /\b(\d{1,4})\s+tracks?\b/i,
+    /\b(\d{1,4})\s+трек(?:а|ов)?\b/i,
+    /\btracks?\s*[:：]?\s*(\d{1,4})\b/i,
+    /\bтрек(?:а|ов)?\s*[:：]?\s*(\d{1,4})\b/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+
+    if (match && match[1]) {
+      return Number(match[1]) || 0;
+    }
+  }
+
+  return 0;
+}
+
 function getInlinePlaylistDomTrackCount(cardElement) {
   if (!cardElement || !(cardElement instanceof Element)) {
     return 0;
@@ -1705,7 +1730,9 @@ function getInlinePlaylistDomTrackCount(cardElement) {
     ".systemPlaylistTrackList .trackItem",
     ".systemPlaylistTrackList__item",
     ".playlist__tracks .trackItem",
-    ".listenDetails__trackList .trackItem"
+    ".listenDetails__trackList .trackItem",
+    ".compactTrackList__item",
+    ".compactTrackList .trackItem"
   ];
 
   for (const selector of rowSelectors) {
@@ -1716,12 +1743,56 @@ function getInlinePlaylistDomTrackCount(cardElement) {
     }
   }
 
-  const text = cleanSetsText(cardElement.textContent || "");
-  const match =
-    text.match(/\b(\d+)\s+tracks?\b/i) ||
-    text.match(/\b(\d+)\s+трек/i);
+  const explicitCountSelectors = [
+    "[itemprop='numTracks']",
+    "[content][itemprop='numTracks']",
+    "[data-track-count]",
+    "[data-tracks-count]",
+    ".soundStats__stat",
+    ".soundStats",
+    ".genericTrackCount",
+    ".playlist__trackCount",
+    ".systemPlaylistTrackList__count"
+  ];
 
-  return match && match[1] ? Number(match[1]) || 0 : 0;
+  for (const selector of explicitCountSelectors) {
+    const elements = cardElement.querySelectorAll(selector);
+
+    for (const element of elements) {
+      const values = [
+        element.getAttribute("content"),
+        element.getAttribute("data-track-count"),
+        element.getAttribute("data-tracks-count"),
+        element.getAttribute("title"),
+        element.getAttribute("aria-label"),
+        element.textContent
+      ];
+
+      for (const value of values) {
+        const count = parseInlinePlaylistTrackCountText(value);
+
+        if (count > 0) {
+          return count;
+        }
+      }
+    }
+  }
+
+  const attributesToCheck = [
+    cardElement.getAttribute("title"),
+    cardElement.getAttribute("aria-label"),
+    cardElement.textContent
+  ];
+
+  for (const value of attributesToCheck) {
+    const count = parseInlinePlaylistTrackCountText(value);
+
+    if (count > 0) {
+      return count;
+    }
+  }
+
+  return 0;
 }
 
 function getInlinePlaylistActionsContainer(cardElement) {

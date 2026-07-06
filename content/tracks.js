@@ -518,23 +518,10 @@ function getSoundCloudTrackActionsContainer(trackElement) {
     return null;
   }
 
-  // Для треков внутри embedded playlist сначала ищем action bar строки.
+  // Для треков внутри embedded playlist не используем action bar строки.
+  // Иначе кнопка попадает рядом с share/copy/like/more и ломает раскладку.
+  // Возвращаем саму строку, а CSS поставит кнопку справа сбоку.
   if (isSoundCloudPlaylistInnerTrackRow(trackElement)) {
-    const rowSelectors = [
-      ".trackItem__actions",
-      ".trackItem__additional",
-      ".sc-button-group"
-    ];
-
-    for (const selector of rowSelectors) {
-      const element = trackElement.querySelector(selector);
-
-      if (isUsableSoundCloudActionsContainer(element)) {
-        return element;
-      }
-    }
-
-    // Если у строки нет отдельного action bar — вставляем маленькую кнопку в саму строку.
     return trackElement;
   }
 
@@ -642,8 +629,9 @@ function addIconOnTrackElement(trackElement, mediaItem) {
     existingIcon.remove();
   }
 
-  if (!isSoundCloud) {
+  if (!isSoundCloud || isSoundCloudPlaylistInnerTrackRow(trackElement)) {
     const computedStyle = window.getComputedStyle(trackElement);
+
     if (computedStyle.position === "static") {
       trackElement.style.position = "relative";
     }

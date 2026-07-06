@@ -296,26 +296,32 @@ function injectStyles() {
     }
     
     .media-downloader-soundcloud-playlist-row-button {
-      width: 28px !important;
-      height: 28px !important;
-      min-width: 28px !important;
+      position: absolute !important;
+      top: 50% !important;
+      right: 8px !important;
+      transform: translateY(-50%) !important;
     
-      margin: 0 0 0 8px !important;
+      width: 34px !important;
+      height: 34px !important;
+      min-width: 34px !important;
+    
+      margin: 0 !important;
       padding: 0 !important;
     
-      border-radius: 4px !important;
-      align-self: center !important;
+      border-radius: 6px !important;
+      align-self: auto !important;
+      z-index: 20 !important;
     }
     
     .media-downloader-soundcloud-playlist-row-button .md-icon-symbol {
-      width: 18px !important;
-      height: 18px !important;
-      min-width: 18px !important;
+      width: 20px !important;
+      height: 20px !important;
+      min-width: 20px !important;
     }
     
     .media-downloader-soundcloud-playlist-row-button .md-icon-symbol svg {
-      width: 16px !important;
-      height: 16px !important;
+      width: 18px !important;
+      height: 18px !important;
     }
     
     .media-downloader-soundcloud-playlist-row-button .md-icon-text,

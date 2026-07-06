@@ -2332,8 +2332,11 @@ function scanInlineSoundCloudPlaylistCards() {
   cards.forEach((cardElement) => {
     const existingButton = cardElement.querySelector(`.${SETS_INLINE_BUTTON_CLASS}`);
 
-    // Уже обработанная карточка не должна заново трогать DOM на каждый mutation.
+    // Даже если кнопка "Скачать плейлист" уже есть,
+    // строки внутри embedded playlist могли дорисоваться позже.
+    // Поэтому не выходим полностью, а продолжаем обработку строк.
     if (existingButton && existingButton.getAttribute(SETS_INLINE_URL_ATTRIBUTE)) {
+      markInlinePlaylistTrackRowsForSoloDownload(cardElement);
       return;
     }
 

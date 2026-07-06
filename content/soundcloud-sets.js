@@ -2134,6 +2134,97 @@ function scheduleInlineSoundCloudPlaylistScan(delay = SETS_INLINE_SCAN_DEBOUNCE_
   }, effectiveDelay);
 }
 
+function getInlinePlaylistTrackRows(cardElement) {
+  if (!cardElement || !(cardElement instanceof Element)) {
+    return [];
+  }
+
+  return Array.from(
+    cardElement.querySelectorAll(
+      [
+        ".trackItem",
+        ".systemPlaylistTrackList__item",
+        ".compactTrackList__item",
+        ".playlist__tracks .trackItem",
+        ".listenDetails__trackList .trackItem"
+      ].join(",")
+    )
+  );
+}
+
+function getInlinePlaylistTrackLinkFromRow(rowElement) {
+  if (!rowElement || !(rowElement instanceof Element)) {
+    return null;
+  }
+
+  const selectors = [
+    ".trackItem__trackTitle[href]",
+    ".trackItem__trackTitle a[href]",
+    ".soundTitle__title[href]",
+    ".soundTitle__title a[href]",
+    "a[itemprop='url'][href]",
+    "a[href^='/'][href]",
+    "a[href*='soundcloud.com/'][href]"
+  ];
+
+  for (const selector of selectors) {
+    const links = rowElement.querySelectorAll(selector);
+
+    for (const link of links) {
+      const href = link.getAttribute("href") || "";
+
+      if (!href || href.includes("/sets/")) {
+        continue;
+      }
+
+      if (isSoundCloudTrackPermalinkUrl(href)) {
+        return link;
+      }
+    }
+  }
+
+  return null;
+}
+
+function getInlinePlaylistTrackTitleFromRow(rowElement, trackLink) {
+  const title =
+    cleanSetsText(rowElement.querySelector(".trackItem__trackTitle")?.textContent || "") ||
+    cleanSetsText(rowElement.querySelector(".soundTitle__title")?.textContent || "") ||
+    cleanSetsText(trackLink?.textContent || "");
+
+  return title || "";
+}
+
+function markInlinePlaylistTrackRowsForSoloDownload(cardElement) {
+  getInlinePlaylistTrackRows(cardElement).forEach((rowElement) => {
+    if (rowElement.hasAttribute("data-media-downloader-track")) {
+      return;
+    }
+
+    const trackLink = getInlinePlaylistTrackLinkFromRow(rowElement);
+
+    if (!trackLink) {
+      return;
+    }
+
+    const title = getInlinePlaylistTrackTitleFromRow(rowElement, trackLink);
+
+    if (!title) {
+      return;
+    }
+
+    rowElement.setAttribute("data-media-downloader-track", "true");
+    rowElement.setAttribute(TRACK_TITLE_ATTRIBUTE, title);
+    rowElement.setAttribute(TRACK_AUTHOR_ATTRIBUTE, getInlinePlaylistAuthor(cardElement));
+    rowElement.setAttribute(TRACK_ADAPTER_ATTRIBUTE, "soundcloud");
+
+    // Даём tracks.js/restoreTrackButtonsIfMissing() шанс сразу поставить кнопку.
+    if (typeof scheduleMediaDownloaderScan === "function") {
+      scheduleMediaDownloaderScan(300);
+    }
+  });
+}
+
 function scanInlineSoundCloudPlaylistCards() {
   if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
     return;
@@ -2185,9 +2276,17 @@ function scanInlineSoundCloudPlaylistCards() {
     cardElement.setAttribute(SETS_INLINE_CARD_ATTRIBUTE, "true");
     cardElement.setAttribute(SETS_INLINE_URL_ATTRIBUTE, permalinkUrl);
 
+    markInlinePlaylistTrackRowsForSoloDownload(cardElement);
+
     cardElement
       .querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`)
-      .forEach((element) => element.remove());
+      .forEach((element) => {
+        if (element.closest(".trackItem, .systemPlaylistTrackList__item, .compactTrackList__item")) {
+          return;
+        }
+
+        element.remove();
+      });
 
     const domCount = getInlinePlaylistDomTrackCount(cardElement);
 

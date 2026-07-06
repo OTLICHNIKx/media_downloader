@@ -294,6 +294,36 @@ function injectStyles() {
       opacity: 0 !important;
       max-width: 0 !important;
     }
+    
+    .media-downloader-soundcloud-playlist-row-button {
+      width: 28px !important;
+      height: 28px !important;
+      min-width: 28px !important;
+    
+      margin: 0 0 0 8px !important;
+      padding: 0 !important;
+    
+      border-radius: 4px !important;
+      align-self: center !important;
+    }
+    
+    .media-downloader-soundcloud-playlist-row-button .md-icon-symbol {
+      width: 18px !important;
+      height: 18px !important;
+      min-width: 18px !important;
+    }
+    
+    .media-downloader-soundcloud-playlist-row-button .md-icon-symbol svg {
+      width: 16px !important;
+      height: 16px !important;
+    }
+    
+    .media-downloader-soundcloud-playlist-row-button .md-icon-text,
+    .media-downloader-soundcloud-playlist-row-button:hover .md-icon-text {
+      display: none !important;
+      opacity: 0 !important;
+      max-width: 0 !important;
+    }
   `;
 
   document.documentElement.appendChild(style);

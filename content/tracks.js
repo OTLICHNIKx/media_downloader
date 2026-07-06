@@ -405,12 +405,41 @@ function isSoundCloudPlaylistPermalinkForSoloSkip(href) {
   }
 }
 
+function isSoundCloudPlaylistInnerTrackRow(trackElement) {
+  if (!trackElement || !(trackElement instanceof Element)) {
+    return false;
+  }
+
+  if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return false;
+  }
+
+  return Boolean(
+    trackElement.closest("[data-media-downloader-soundcloud-playlist-card]") &&
+      trackElement.closest(
+        [
+          ".trackItem",
+          ".systemPlaylistTrackList__item",
+          ".compactTrackList__item",
+          ".playlist__tracks .trackItem",
+          ".listenDetails__trackList .trackItem"
+        ].join(",")
+      )
+  );
+}
+
 function isSoundCloudPlaylistCardForSoloSkip(trackElement) {
   if (!trackElement || !(trackElement instanceof Element)) {
     return false;
   }
 
   if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return false;
+  }
+
+  // Внутренние строки треков плейлиста НЕ блокируем:
+  // на них как раз нужна отдельная solo-кнопка.
+  if (isSoundCloudPlaylistInnerTrackRow(trackElement)) {
     return false;
   }
 
@@ -485,6 +514,7 @@ function getSoundCloudTrackActionsContainer(trackElement) {
     ".soundFooter",
     ".trackItem__actions",
     ".trackItem__additional",
+    ".trackItem__content",
     ".listenEngagement__actions",
     ".listenEngagement"
   ];
@@ -502,6 +532,13 @@ function getSoundCloudTrackActionsContainer(trackElement) {
     if (isUsableSoundCloudActionsContainer(element)) {
       return element;
     }
+  }
+
+  // Для треков внутри embedded playlist у SoundCloud часто нет отдельного
+  // action bar, поэтому безопасно вставляем кнопку прямо в строку трека.
+  // Для внешней карточки плейлиста этот fallback НЕ сработает.
+  if (isSoundCloudPlaylistInnerTrackRow(trackElement)) {
+    return trackElement;
   }
 
   return null;
@@ -592,6 +629,10 @@ function addIconOnTrackElement(trackElement, mediaItem) {
 
   if (isSoundCloud) {
     icon.classList.add("media-downloader-soundcloud-track-button");
+  
+    if (isSoundCloudPlaylistInnerTrackRow(trackElement)) {
+      icon.classList.add("media-downloader-soundcloud-playlist-row-button");
+    }
   }
 
   icon.setAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE, mediaItem.url);

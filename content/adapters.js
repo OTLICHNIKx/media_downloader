@@ -202,17 +202,12 @@ function isSoundCloudPlaylistCardCandidate(candidateElement) {
     return false;
   }
 
-  if (candidateElement.closest("[data-media-downloader-soundcloud-playlist-card]")) {
-    return true;
-  }
-
-  const outerCard =
-    candidateElement.closest(".sound") ||
-    candidateElement.closest(".soundList__item") ||
-    candidateElement.closest(".searchList__item") ||
-    candidateElement;
-
-  return Boolean(getSoundCloudPlaylistLinkFromCandidate(outerCard));
+  // Не делаем здесь querySelector("a[href*='/sets/']") для каждой карточки.
+  // Это слишком дорого на страницах артиста.
+  // Playlist-card помечает отдельный debounce-сканер в soundcloud-sets.js.
+  return Boolean(
+    candidateElement.closest("[data-media-downloader-soundcloud-playlist-card]")
+  );
 }
 
 function isAdapterCandidateUseful(candidateElement) {

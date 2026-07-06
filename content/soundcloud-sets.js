@@ -33,6 +33,12 @@ let setsLastNavigationAt = 0;
 let setsNavigationScanToken = 0;
 let setsButtonBusy = false;
 
+let setsInlineScanTimer = null;
+let setsInlineLastScanAt = 0;
+
+const SETS_INLINE_SCAN_DEBOUNCE_MS = 900;
+const SETS_INLINE_MAX_CARDS_PER_SCAN = 40;
+
 // Инжектирует стили плавающей кнопки (один раз).
 // Скрывается через .media-downloader-ui-disabled, как и инлайн-иконки.
 function injectSetsStyles() {
@@ -1722,7 +1728,7 @@ function upsertInlinePlaylistButton(cardElement, playlistInfo) {
   const actionsContainer = getInlinePlaylistActionsContainer(cardElement);
 
   if (!actionsContainer) {
-    scheduleSetsScan(500);
+    scheduleInlineSoundCloudPlaylistScan(1200);
     return;
   }
 
@@ -1779,9 +1785,56 @@ function upsertInlinePlaylistButton(cardElement, playlistInfo) {
     actionsContainer.appendChild(button);
   }
 
-  button.textContent = getInlinePlaylistButtonText(playlistInfo.trackCount);
+  const nextText = getInlinePlaylistButtonText(playlistInfo.trackCount);
 
-  warmUpInlinePlaylistInfo(playlistInfo.permalinkUrl, playlistInfo, button);
+  if (button.textContent !== nextText) {
+    button.textContent = nextText;
+  }
+
+  // ВАЖНО:
+  // Не делаем warmUpInlinePlaylistInfo() автоматически.
+  // Иначе на странице артиста можно запустить десятки SoundCloud API resolve
+  // прямо во время рендера, из-за чего сайт начинает лагать.
+  // Полный resolve делаем только по клику.
+}
+
+function isInlinePlaylistCardNearViewport(cardElement) {
+  if (!cardElement || !(cardElement instanceof Element)) {
+    return false;
+  }
+
+  const rect = cardElement.getBoundingClientRect();
+
+  return (
+    rect.width > 120 &&
+    rect.height > 40 &&
+    rect.bottom >= -800 &&
+    rect.top <= window.innerHeight + 2200
+  );
+}
+
+function scheduleInlineSoundCloudPlaylistScan(delay = SETS_INLINE_SCAN_DEBOUNCE_MS) {
+  if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return;
+  }
+
+  const sinceLastScan = Date.now() - setsInlineLastScanAt;
+  const effectiveDelay = sinceLastScan > 2500
+    ? Math.min(delay, 250)
+    : delay;
+
+  clearTimeout(setsInlineScanTimer);
+
+  setsInlineScanTimer = setTimeout(() => {
+    try {
+      scanInlineSoundCloudPlaylistCards();
+    } catch (error) {
+      console.warn(
+        "[Media Downloader] Sets: inline playlist scan failed:",
+        error?.message || error
+      );
+    }
+  }, effectiveDelay);
 }
 
 function scanInlineSoundCloudPlaylistCards() {
@@ -1789,15 +1842,28 @@ function scanInlineSoundCloudPlaylistCards() {
     return;
   }
 
-  const cards = document.querySelectorAll(
-    [
-      ".sound",
-      ".soundList__item",
-      ".searchList__item"
-    ].join(",")
-  );
+  setsInlineLastScanAt = Date.now();
+
+  const cards = Array.from(
+    document.querySelectorAll(
+      [
+        ".sound",
+        ".soundList__item",
+        ".searchList__item"
+      ].join(",")
+    )
+  )
+    .filter(isInlinePlaylistCardNearViewport)
+    .slice(0, SETS_INLINE_MAX_CARDS_PER_SCAN);
 
   cards.forEach((cardElement) => {
+    const existingButton = cardElement.querySelector(`.${SETS_INLINE_BUTTON_CLASS}`);
+
+    // Уже обработанная карточка не должна заново трогать DOM на каждый mutation.
+    if (existingButton && existingButton.getAttribute(SETS_INLINE_URL_ATTRIBUTE)) {
+      return;
+    }
+
     const playlistLink = getInlinePlaylistLinkFromCard(cardElement);
 
     if (!playlistLink) {
@@ -1812,8 +1878,6 @@ function scanInlineSoundCloudPlaylistCards() {
       return;
     }
 
-    // Если мы уже на самой странице этого плейлиста, там живёт плавающая кнопка.
-    // Встроенную кнопку на эту же карточку не дублируем.
     if (
       isSoundCloudSetsPage() &&
       getSoundCloudComparablePath(permalinkUrl) === getCurrentSetsPageKey()
@@ -1822,9 +1886,8 @@ function scanInlineSoundCloudPlaylistCards() {
     }
 
     cardElement.setAttribute(SETS_INLINE_CARD_ATTRIBUTE, "true");
+    cardElement.setAttribute(SETS_INLINE_URL_ATTRIBUTE, permalinkUrl);
 
-    // Если раньше эта карточка ошибочно получила solo-кнопку,
-    // убираем её: вместо неё будет кнопка плейлиста.
     cardElement
       .querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`)
       .forEach((element) => element.remove());
@@ -2112,13 +2175,13 @@ function initSoundCloudSetsButton() {
   injectSetsStyles();
   installSetsSpaNavigationHooks();
   runSetsScanSafely();
-  scanInlineSoundCloudPlaylistCards();
+  scheduleInlineSoundCloudPlaylistScan(1000);
 
   // MutationObserver — реагируем на ре-рендер карточек Ember'ом.
   const observer = new MutationObserver(() => {
     handleSetsSpaNavigation();
     scheduleSetsScan(400);
-    scanInlineSoundCloudPlaylistCards();
+    scheduleInlineSoundCloudPlaylistScan(1000);
   });
 
   observer.observe(document.documentElement, {
@@ -2131,7 +2194,7 @@ function initSoundCloudSetsButton() {
   setInterval(() => {
     handleSetsSpaNavigation();
     scheduleSetsScan(800);
-    scanInlineSoundCloudPlaylistCards();
+    scheduleInlineSoundCloudPlaylistScan(1200);
   }, 3000);
 }
 

@@ -25,7 +25,9 @@ const MEDIA_DOWNLOADER_NAVIGATION_RESCAN_DELAYS_MS = [
   900,
   1600,
   3000,
-  5000
+  5000,
+  8000,
+  12000
 ];
 
 const MEDIA_DOWNLOADER_FALLBACK_ATTRIBUTE = "data-media-downloader-fallback-id";

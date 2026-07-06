@@ -431,6 +431,14 @@ function getSoundCloudTrackActionsContainer(trackElement) {
 }
 
 function scheduleSoundCloudTrackButtonRetry() {
+  // Если есть серия SPA-ресканов — используем её.
+  // Один scheduleMediaDownloaderScan() может не попасть в момент,
+  // когда SoundCloud уже дорисовал action bar.
+  if (typeof scheduleMediaDownloaderRescansAfterNavigation === "function") {
+    scheduleMediaDownloaderRescansAfterNavigation();
+    return;
+  }
+
   if (typeof scheduleMediaDownloaderScan === "function") {
     scheduleMediaDownloaderScan(500);
   }
@@ -440,12 +448,24 @@ function addIconOnTrackElement(trackElement, mediaItem) {
   if (!trackElement || !mediaItem) return;
 
   const isSoundCloud = isSoundCloudTrackButtonContext(trackElement);
+
+  // ВАЖНО:
+  // Сначала запоминаем stream binding, и только потом пытаемся вставить кнопку.
+  // На F5 / SPA-render SoundCloud может поймать поток раньше, чем дорисует
+  // .soundActions/.trackItem__actions. Если выйти раньше без rememberTrackBinding(),
+  // повторный scan уже не сможет восстановить кнопку.
+  if (isSoundCloud) {
+    rememberTrackBinding(trackElement, mediaItem);
+  }
+
   const targetContainer = isSoundCloud
     ? getSoundCloudTrackActionsContainer(trackElement)
     : trackElement;
 
   // На SoundCloud нельзя падать в absolute/generic overlay.
   // Если action bar ещё не дорисован Ember'ом — ждём следующий scan.
+  // Binding уже сохранён выше, поэтому restoreTrackButtonsIfMissing()
+  // сможет поставить кнопку позже.
   if (isSoundCloud && !targetContainer) {
     scheduleSoundCloudTrackButtonRetry();
     return;
@@ -495,17 +515,28 @@ function addIconOnTrackElement(trackElement, mediaItem) {
   icon.setAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE, mediaItem.url);
 
   if (mediaItem.soundCloudFallbackPlaylistId) {
-    icon.setAttribute(MEDIA_DOWNLOADER_FALLBACK_ATTRIBUTE, mediaItem.soundCloudFallbackPlaylistId);
+    icon.setAttribute(
+      MEDIA_DOWNLOADER_FALLBACK_ATTRIBUTE,
+      mediaItem.soundCloudFallbackPlaylistId
+    );
   }
 
-  icon.setAttribute(TRACK_STREAM_TYPE_ATTRIBUTE, mediaItem.streamType || mediaItem.extension);
+  icon.setAttribute(
+    TRACK_STREAM_TYPE_ATTRIBUTE,
+    mediaItem.streamType || mediaItem.extension
+  );
 
   targetContainer.appendChild(icon);
 
   trackElement.setAttribute(TRACK_BOUND_ATTRIBUTE, "true");
   trackElement.setAttribute(TRACK_STREAM_URL_ATTRIBUTE, mediaItem.url);
-  trackElement.setAttribute(TRACK_STREAM_TYPE_ATTRIBUTE, mediaItem.streamType || mediaItem.extension);
+  trackElement.setAttribute(
+    TRACK_STREAM_TYPE_ATTRIBUTE,
+    mediaItem.streamType || mediaItem.extension
+  );
 
+  // Для не-SoundCloud сохраняем как раньше в конце.
+  // Для SoundCloud это повторный safe-call, Map просто обновит тот же ключ.
   rememberTrackBinding(trackElement, mediaItem);
 }
 

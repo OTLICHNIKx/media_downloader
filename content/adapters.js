@@ -227,20 +227,19 @@ function applyMediaMetadataAdapters() {
   if (!adapter) return;
 
   const selector = adapter.cardSelectors.join(",");
+
   const candidates = Array.from(document.querySelectorAll(selector))
+    .filter((candidateElement) => isAdapterCandidateUseful(candidateElement))
     .sort((a, b) => {
       const rectA = a.getBoundingClientRect();
       const rectB = b.getBoundingClientRect();
 
-      return rectA.width * rectA.height - rectB.width * rectB.height;
+      // Сначала видимые сверху страницы, а не просто самые маленькие элементы.
+      return rectA.top - rectB.top;
     })
-    .slice(0, 100);
-
-
+    .slice(0, adapter.name === "soundcloud" ? 300 : 100);
 
   candidates.forEach((candidateElement) => {
-    if (!isAdapterCandidateUseful(candidateElement)) return;
-
     const metadata = getAdapterMetadata(candidateElement, adapter);
 
     if (!metadata.title) return;

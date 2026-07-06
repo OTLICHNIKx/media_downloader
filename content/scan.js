@@ -385,8 +385,14 @@ function scheduleMediaDownloaderScan(delay = 250) {
   mediaDownloaderScanTimer = setTimeout(runScanSafely, effectiveDelay);
 }
 
-function resetMediaDownloaderTrackStateForNavigation() {
-  // 1. Удаляем все наши кнопки.
+function isMediaDownloaderSoundCloudPage() {
+  return window.location.hostname.toLowerCase().includes("soundcloud.com");
+}
+
+function resetMediaDownloaderTrackStateForNavigation(options = {}) {
+  const preserveTrackBindings = Boolean(options.preserveTrackBindings);
+
+  // 1. Удаляем все наши кнопки из DOM.
   document.querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}`).forEach((element) => {
     element.remove();
   });
@@ -397,9 +403,8 @@ function resetMediaDownloaderTrackStateForNavigation() {
     element.classList.remove("media-downloader-audio-with-button");
   });
 
-  // 3. ВАЖНО:
-  // SoundCloud может переиспользовать DOM-узлы между /all, /tracks, /sets.
-  // Поэтому чистим не только кнопки, но и наши track/capture metadata.
+  // 3. SoundCloud/Ember переиспользует DOM-узлы между переходами.
+  // Поэтому чистим DOM-атрибуты, но НЕ обязательно чистим память binding'ов.
   const markedTrackElements = document.querySelectorAll(
     [
       "[data-media-downloader-track]",
@@ -426,7 +431,15 @@ function resetMediaDownloaderTrackStateForNavigation() {
     delete element.dataset.mediaDownloaderLastHlsCheckAt;
   });
 
-  mediaDownloaderTrackBindings.clear();
+  // ВАЖНО:
+  // Для SoundCloud bindings надо сохранять между SPA-ре-рендерами.
+  // Иначе при возврате на ту же страницу кнопка исчезает, потому что
+  // поток уже был пойман раньше, но привязку trackKey -> mediaItem мы стерли.
+  if (!preserveTrackBindings) {
+    mediaDownloaderTrackBindings.clear();
+  }
+
+  // captureId всегда одноразовый, его можно чистить.
   mediaDownloaderCaptureToTrackId.clear();
 }
 
@@ -442,20 +455,30 @@ function scheduleMediaDownloaderRescansAfterNavigation() {
   });
 }
 
-function handlePossibleSpaNavigation() {
-  if (mediaDownloaderLastLocation === window.location.href) {
+function handlePossibleSpaNavigation(options = {}) {
+  const forceRescan = Boolean(options.forceRescan);
+  const locationChanged = mediaDownloaderLastLocation !== window.location.href;
+
+  // SoundCloud иногда делает повторный SPA-render той же самой страницы:
+  // URL не изменился, но DOM уже пересобран и наши кнопки могли исчезнуть.
+  // В таком случае не делаем reset, а просто запускаем серию сканов.
+  if (!locationChanged) {
+    if (forceRescan) {
+      scheduleMediaDownloaderRescansAfterNavigation();
+    }
+
     return;
   }
 
   mediaDownloaderLastLocation = window.location.href;
 
-  resetMediaDownloaderTrackStateForNavigation();
+  resetMediaDownloaderTrackStateForNavigation({
+    preserveTrackBindings: isMediaDownloaderSoundCloudPage()
+  });
 
   // Сбрасываем точку отсчёта max-wait под новую страницу.
   mediaDownloaderLastScanRunAt = Date.now();
 
-  // SoundCloud рендерит новую вкладку не сразу.
-  // Поэтому делаем серию сканов, а не один scan через debounce.
   scheduleMediaDownloaderRescansAfterNavigation();
 }
 
@@ -466,33 +489,40 @@ function installSpaNavigationHooks() {
   const originalPushState = history.pushState;
   const originalReplaceState = history.replaceState;
 
-  function afterNavigation() {
-    setTimeout(handlePossibleSpaNavigation, 0);
-    setTimeout(scheduleMediaDownloaderRescansAfterNavigation, 250);
+  function afterHistoryNavigation() {
+    // Даже если URL тот же самый, SoundCloud мог пересобрать outlet.
+    // Поэтому forceRescan=true запускает повторные сканы без жесткого reset.
+    setTimeout(() => {
+      handlePossibleSpaNavigation({ forceRescan: true });
+    }, 0);
+
+    setTimeout(() => {
+      scheduleMediaDownloaderRescansAfterNavigation();
+    }, 250);
   }
 
   history.pushState = function patchedPushState(...args) {
     const result = originalPushState.apply(this, args);
-    afterNavigation();
+    afterHistoryNavigation();
     return result;
   };
 
   history.replaceState = function patchedReplaceState(...args) {
     const result = originalReplaceState.apply(this, args);
-    afterNavigation();
+    afterHistoryNavigation();
     return result;
   };
 
-  window.addEventListener("popstate", afterNavigation);
-  window.addEventListener("hashchange", afterNavigation);
+  window.addEventListener("popstate", afterHistoryNavigation);
+  window.addEventListener("hashchange", afterHistoryNavigation);
 
   window.addEventListener("pageshow", () => {
-    scheduleMediaDownloaderRescansAfterNavigation();
+    handlePossibleSpaNavigation({ forceRescan: true });
   });
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
-      scheduleMediaDownloaderRescansAfterNavigation();
+      handlePossibleSpaNavigation({ forceRescan: true });
     }
   });
 }

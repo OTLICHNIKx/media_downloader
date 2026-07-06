@@ -1310,9 +1310,8 @@ function createSetsButton(trackCount) {
         }, 2500);
         return;
       }
- 
-      if (tracks.length === 0) {
 
+      if (tracks.length === 0) {
         newButton.textContent = "Треки не найдены";
         setTimeout(() => {
           newButton.disabled = false;
@@ -1325,8 +1324,15 @@ function createSetsButton(trackCount) {
 
       const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const storageKey = `playlistBatch:${batchId}`;
+      const playlistIndexWidth = Math.max(2, String(tracks.length).length);
 
-      const batchTracks = tracks.map((track) => ({
+      const batchTracks = tracks.map((track, index) => ({
+        // Фиксируем исходный порядок плейлиста в самом батче.
+        // Потом downloader использует этот номер в имени файла: 01. Artist - Track.mp3.
+        // Без числового префикса ZIP/проводник часто сортируют треки по названию,
+        // из-за чего альбом выглядит скачанным «не по порядку».
+        playlistIndex: index + 1,
+        playlistIndexWidth,
         trackId: track.trackId || "",
         trackUrn: track.trackUrn || "",
         title: track.title || "",

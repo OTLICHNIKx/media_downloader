@@ -342,10 +342,22 @@ function sanitizeTrackName(name) {
   return cleaned.slice(0, 160) || "track";
 }
 
+function getTrackFilenameNumber(index, track) {
+  const fallbackIndex = index + 1;
+  const playlistIndex = Number(track?.playlistIndex || fallbackIndex) || fallbackIndex;
+  const playlistIndexWidth = Math.max(
+    2,
+    Number(track?.playlistIndexWidth || 0) || String(playlistIndex).length
+  );
+
+  return String(playlistIndex).padStart(playlistIndexWidth, "0");
+}
+
 function buildTrackFilename(index, track) {
+  const numberPart = `${getTrackFilenameNumber(index, track)}. `;
   const authorPart = track.author ? `${track.author} - ` : "";
 
-  return sanitizeTrackName(`${authorPart}${track.title}`);
+  return sanitizeTrackName(`${numberPart}${authorPart}${track.title}`);
 }
 
 // Запрос к SoundCloud API через background service worker.
@@ -423,9 +435,11 @@ async function downloadSegmentsInParallel(segmentUrls, abortController, onSegmen
 // Бросает при ошибке (caller решает — пропустить трек или остановиться).
 async function downloadTrackOnce(track, index, clientId, abortController, callbacks) {
   const baseName = buildTrackFilename(index, track);
+
   if (track.availabilityReason) {
     throw new Error(track.availabilityReason);
   }
+
   callbacks.onStage(index, "playlist", "Загрузка плейлиста");
 
   // 1. Запрос к SoundCloud API через background (cookies + client_id).
@@ -434,21 +448,22 @@ async function downloadTrackOnce(track, index, clientId, abortController, callba
     ...track,
     durationMs: track.durationMs || resource.durationMs || 0
   };
+
   if (resource.kind === "direct" && resource.directUrl) {
-  callbacks.onStage(index, "segments", "Загрузка progressive audio");
+    callbacks.onStage(index, "segments", "Загрузка progressive audio");
 
-  const directBuffer = await fetchArrayBuffer(resource.directUrl, {
-    signal: abortController.signal,
-    label: "progressive audio"
-  });
+    const directBuffer = await fetchArrayBuffer(resource.directUrl, {
+      signal: abortController.signal,
+      label: "progressive audio"
+    });
 
-  const directExt = resource.directExtension || ".mp3";
+    const directExt = resource.directExtension || ".mp3";
 
-  return {
-    filename: `${baseName}${directExt}`,
-    arrayBuffer: directBuffer
-  };
-}
+    return {
+      filename: `${baseName}${directExt}`,
+      arrayBuffer: directBuffer
+    };
+  }
 
   if (!resource.playlistUrl || !resource.playlistText) {
     throw new Error(
@@ -466,25 +481,26 @@ async function downloadTrackOnce(track, index, clientId, abortController, callba
   );
 
   assertDownloadedDurationLooksComplete(
-  effectiveTracktrack,
-  prepared.hlsDurationMs || getHlsPlaylistDurationMs(
-    resource.playlistText,
-    resource.playlistUrl
-  )
-);
+    effectiveTrack,
+    prepared.hlsDurationMs || getHlsPlaylistDurationMs(
+      resource.playlistText,
+      resource.playlistUrl
+    )
+  );
 
-  const expectedDurationMs = Number(track.durationMs || 0) || 0;
-  const actualDurationMs = getPreparedPlaylistDurationMs(prepared);
+  const expectedDurationMs = Number(effectiveTrack.durationMs || 0) || 0;
+  const actualDurationMs =
+    prepared.hlsDurationMs || getPreparedPlaylistDurationMs(prepared);
 
   const allowedGapMs = getAllowedDurationGapMs(expectedDurationMs);
 
   if (
     expectedDurationMs &&
-    collectedDurationMs > 0 &&
-    collectedDurationMs + allowedGapMs < expectedDurationMs
+    actualDurationMs > 0 &&
+    actualDurationMs + allowedGapMs < expectedDurationMs
   ) {
     throw new Error(
-      `HLS playlist выглядит неполным: собрано ${Math.round(collectedDurationMs / 1000)}с из ${Math.round(expectedDurationMs / 1000)}с`
+      `HLS playlist выглядит неполным: собрано ${Math.round(actualDurationMs / 1000)}с из ${Math.round(expectedDurationMs / 1000)}с`
     );
   }
 

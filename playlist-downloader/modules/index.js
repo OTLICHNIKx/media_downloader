@@ -202,7 +202,7 @@ function showDownloadZipButton(results, playlistTitle) {
   downloadZipButton.classList.remove("hidden");
   downloadZipButton.textContent = `Скачать ZIP (${results.length} из ${totalTracks})`;
   downloadZipButton.onclick = () => {
-    downloadZip(results, zipTitle);
+    downloadZip(results, playlistTitle);
   };
 }
 

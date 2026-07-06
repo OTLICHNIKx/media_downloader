@@ -1703,9 +1703,28 @@ function parseInlinePlaylistTrackCountText(value) {
   }
 
   const patterns = [
+    // Show all 16 tracks / View all 16 tracks
+    /\b(?:show|view|see|display)\s+(?:all\s+)?(\d{1,4})\s+tracks?\b/i,
+
+    // Show 16 more tracks
+    /\b(?:show|view|see|display)\s+(\d{1,4})\s+more\s+tracks?\b/i,
+
+    // 16 tracks
     /\b(\d{1,4})\s+tracks?\b/i,
-    /\b(\d{1,4})\s+трек(?:а|ов)?\b/i,
+
+    // tracks: 16
     /\btracks?\s*[:：]?\s*(\d{1,4})\b/i,
+
+    // Показать все 16 треков / Показать 16 треков
+    /\bпоказать\s+(?:все\s+)?(\d{1,4})\s+трек(?:а|ов)?\b/i,
+
+    // Показать ещё 16 треков
+    /\bпоказать\s+(?:ещ[её]\s+)?(\d{1,4})\s+трек(?:а|ов)?\b/i,
+
+    // 16 треков
+    /\b(\d{1,4})\s+трек(?:а|ов)?\b/i,
+
+    // треков: 16
     /\bтрек(?:а|ов)?\s*[:：]?\s*(\d{1,4})\b/i
   ];
 
@@ -1725,29 +1744,20 @@ function getInlinePlaylistDomTrackCount(cardElement) {
     return 0;
   }
 
-  const rowSelectors = [
-    ".trackList .trackItem",
-    ".systemPlaylistTrackList .trackItem",
-    ".systemPlaylistTrackList__item",
-    ".playlist__tracks .trackItem",
-    ".listenDetails__trackList .trackItem",
-    ".compactTrackList__item",
-    ".compactTrackList .trackItem"
-  ];
-
-  for (const selector of rowSelectors) {
-    const count = cardElement.querySelectorAll(selector).length;
-
-    if (count > 0) {
-      return count;
-    }
-  }
-
+  // 1. Сначала ищем полный счётчик.
+  // Для больших embedded playlists SoundCloud часто рендерит только первые 5 строк,
+  // а полный размер лежит в тексте кнопки/ссылки "Show all 16 tracks".
   const explicitCountSelectors = [
     "[itemprop='numTracks']",
     "[content][itemprop='numTracks']",
     "[data-track-count]",
     "[data-tracks-count]",
+    "[title*='track']",
+    "[aria-label*='track']",
+    "[title*='трек']",
+    "[aria-label*='трек']",
+    "button",
+    "a",
     ".soundStats__stat",
     ".soundStats",
     ".genericTrackCount",
@@ -1778,14 +1788,36 @@ function getInlinePlaylistDomTrackCount(cardElement) {
     }
   }
 
-  const attributesToCheck = [
-    cardElement.getAttribute("title"),
-    cardElement.getAttribute("aria-label"),
-    cardElement.textContent
+  // 2. Проверяем весь текст карточки.
+  // Это тоже должно быть раньше подсчёта строк, потому что строк может быть только 5.
+  const cardTextCount = parseInlinePlaylistTrackCountText(
+    [
+      cardElement.getAttribute("title"),
+      cardElement.getAttribute("aria-label"),
+      cardElement.textContent
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+
+  if (cardTextCount > 0) {
+    return cardTextCount;
+  }
+
+  // 3. Только последний fallback: считаем видимые строки.
+  // Это не полный размер плейлиста, а сколько SoundCloud сейчас отрендерил.
+  const rowSelectors = [
+    ".trackList .trackItem",
+    ".systemPlaylistTrackList .trackItem",
+    ".systemPlaylistTrackList__item",
+    ".playlist__tracks .trackItem",
+    ".listenDetails__trackList .trackItem",
+    ".compactTrackList__item",
+    ".compactTrackList .trackItem"
   ];
 
-  for (const value of attributesToCheck) {
-    const count = parseInlinePlaylistTrackCountText(value);
+  for (const selector of rowSelectors) {
+    const count = cardElement.querySelectorAll(selector).length;
 
     if (count > 0) {
       return count;

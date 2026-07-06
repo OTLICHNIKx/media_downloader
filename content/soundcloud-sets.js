@@ -14,10 +14,17 @@ function sanitizeSetsFilename(filename) {
 const SETS_BUTTON_ID = "media-downloader-sets-button";
 const SETS_BUTTON_CLASS = "media-downloader-sets-button";
 const SETS_STYLES_ID = "media-downloader-sets-styles";
+
 const SETS_MAX_SCAN_WAIT_MS = 1500;
+const SETS_DOM_COUNT_GRACE_AFTER_NAV_MS = 1200;
+const SETS_RESCAN_AFTER_NAV_DELAYS_MS = [0, 150, 400, 900, 1600, 3000, 5000];
+
 let setsScanTimer = null;
 let setsLastLocation = window.location.href;
 let setsLastScanRunAt = 0;
+let setsLastNavigationAt = 0;
+let setsNavigationScanToken = 0;
+let setsButtonBusy = false;
 
 // Инжектирует стили плавающей кнопки (один раз).
 // Скрывается через .media-downloader-ui-disabled, как и инлайн-иконки.
@@ -83,6 +90,62 @@ function isSoundCloudSetsPage() {
     window.location.hostname.includes("soundcloud.com") &&
     window.location.pathname.includes("/sets/")
   );
+}
+
+function getSoundCloudComparablePath(value) {
+  try {
+    const parsedUrl = new URL(value, window.location.href);
+
+    if (!parsedUrl.hostname.includes("soundcloud.com")) {
+      return "";
+    }
+
+    return parsedUrl.pathname
+      .replace(/\/+$/g, "")
+      .toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function getCurrentSetsPageKey() {
+  return getSoundCloudComparablePath(window.location.href);
+}
+
+function getPlaylistResourceCandidatePaths(resource) {
+  const paths = [];
+
+  function addPath(value) {
+    const path = getSoundCloudComparablePath(value);
+    if (path) paths.push(path);
+  }
+
+  addPath(resource?.permalink_url);
+  addPath(resource?.permalinkUrl);
+
+  const userSlug = resource?.user?.permalink;
+  const playlistSlug = resource?.permalink;
+
+  if (userSlug && playlistSlug) {
+    paths.push(
+      `/${String(userSlug).replace(/^\/+|\/+$/g, "")}/sets/${String(playlistSlug).replace(/^\/+|\/+$/g, "")}`
+        .toLowerCase()
+    );
+  }
+
+  return [...new Set(paths)];
+}
+
+function isPlaylistResourceForCurrentPage(resource) {
+  const currentPath = getCurrentSetsPageKey();
+  const resourcePaths = getPlaylistResourceCandidatePaths(resource);
+
+  // Если SoundCloud не дал permalink в hydration, оставляем старое поведение.
+  // Но когда permalink есть, обязательно сверяем его с текущим URL,
+  // иначе после SPA-перехода можно взять track_count от прошлого плейлиста.
+  if (resourcePaths.length === 0) return true;
+
+  return resourcePaths.includes(currentPath);
 }
 
 // Извлекает числовой track id из href.
@@ -301,11 +364,14 @@ function extractPlaylistFromHydration() {
 
       const hydration = JSON.parse(match[1]);
 
-      // Ищем playlist-ресурс.
+      // Ищем playlist-ресурс именно для текущего /sets/ URL.
+      // На SPA-переходах старый hydration-скрипт остаётся в DOM,
+      // поэтому без проверки permalink можно показать кнопку прошлого плейлиста.
       for (const item of hydration) {
         const resource = item?.hydratable === "playlist" ? item?.data : null;
 
         if (!resource || (!resource.id && !resource.urn)) continue;
+        if (!isPlaylistResourceForCurrentPage(resource)) continue;
 
         const tracks = Array.isArray(resource.tracks)
           ? resource.tracks.map(normalizePlaylistTrack).filter(Boolean)
@@ -1278,10 +1344,22 @@ function openPlaylistDownloaderUrl(url) {
 }
 
 function createSetsButton(trackCount) {
+  const pageKey = getCurrentSetsPageKey();
   const button = document.getElementById(SETS_BUTTON_ID);
 
   if (button) {
-    button.textContent = `Скачать плейлист (${trackCount})`;
+    if (button.dataset.setsPageKey !== pageKey) {
+      setsButtonBusy = false;
+      button.disabled = false;
+    }
+
+    button.dataset.setsPageKey = pageKey;
+
+    if (!setsButtonBusy) {
+      button.disabled = false;
+      button.textContent = `Скачать плейлист (${trackCount})`;
+    }
+
     return button;
   }
 
@@ -1289,10 +1367,12 @@ function createSetsButton(trackCount) {
   newButton.id = SETS_BUTTON_ID;
   newButton.className = SETS_BUTTON_CLASS;
   newButton.type = "button";
+  newButton.dataset.setsPageKey = pageKey;
   newButton.textContent = `Скачать плейлист (${trackCount})`;
   newButton.title = "Скачать все треки плейлиста в MP3 и упаковать в ZIP";
 
   newButton.addEventListener("click", async () => {
+    setsButtonBusy = true;
     newButton.disabled = true;
     newButton.textContent = "Собираю треки...";
 
@@ -1303,6 +1383,7 @@ function createSetsButton(trackCount) {
       const clientId = getClientId();
 
       if (!clientId) {
+        setsButtonBusy = false;
         newButton.disabled = false;
         newButton.textContent = "client_id не найден";
         setTimeout(() => {
@@ -1312,6 +1393,7 @@ function createSetsButton(trackCount) {
       }
 
       if (tracks.length === 0) {
+        setsButtonBusy = false;
         newButton.textContent = "Треки не найдены";
         setTimeout(() => {
           newButton.disabled = false;
@@ -1328,9 +1410,7 @@ function createSetsButton(trackCount) {
 
       const batchTracks = tracks.map((track, index) => ({
         // Фиксируем исходный порядок плейлиста в самом батче.
-        // Потом downloader использует этот номер в имени файла: 01. Artist - Track.mp3.
-        // Без числового префикса ZIP/проводник часто сортируют треки по названию,
-        // из-за чего альбом выглядит скачанным «не по порядку».
+        // Downloader использует этот номер в имени файла: 01. Artist - Track.mp3.
         playlistIndex: index + 1,
         playlistIndexWidth,
         trackId: track.trackId || "",
@@ -1363,8 +1443,11 @@ function createSetsButton(trackCount) {
 
       await openPlaylistDownloaderUrl(downloaderUrl);
 
+      setsButtonBusy = false;
+      newButton.disabled = false;
       newButton.textContent = "Загрузчик открыт ✓";
     } catch (error) {
+      setsButtonBusy = false;
       newButton.disabled = false;
       newButton.textContent = "Ошибка сбора треков";
       setTimeout(() => {
@@ -1380,8 +1463,24 @@ function createSetsButton(trackCount) {
 function removeSetsButton() {
   const button = document.getElementById(SETS_BUTTON_ID);
 
+  setsButtonBusy = false;
+
   if (button) {
     button.remove();
+  }
+}
+
+function getCurrentDomPlaylistTrackCount() {
+  try {
+    const permalinkCount = collectDomPlaylistTrackPermalinks().length;
+
+    if (permalinkCount > 0) {
+      return permalinkCount;
+    }
+
+    return document.querySelectorAll("a[href*='/tracks/']").length;
+  } catch {
+    return 0;
   }
 }
 
@@ -1395,20 +1494,26 @@ function refreshSetsButton() {
   }
 
   // Быстрый синхронный подсчёт для отображения на кнопке.
-  // priority: hydration > DOM links count
+  // priority: актуальный hydration > DOM trackItem/permalink count.
   const playlistInfo = extractPlaylistFromHydration();
   const hydrationCount = playlistInfo
-      ? Number(playlistInfo.trackCount || playlistInfo.tracks.length || 0)
-      : 0;
+    ? Number(playlistInfo.trackCount || playlistInfo.tracks.length || 0)
+    : 0;
 
   if (hydrationCount > 0) {
     createSetsButton(hydrationCount);
     return;
   }
 
-  // Hydration ещё не загружен (SPA-навигация) — показываем "..." пока ждём.
-  // Кнопка появится с корректным числом на следующем scan.
-  const domCount = document.querySelectorAll("a[href*='/tracks/']").length;
+  // Сразу после SPA-перехода DOM ещё может содержать треки прошлого плейлиста.
+  // Ненадолго убираем кнопку, чтобы не показывать старое количество.
+  if (setsLastNavigationAt && Date.now() - setsLastNavigationAt < SETS_DOM_COUNT_GRACE_AFTER_NAV_MS) {
+    removeSetsButton();
+    return;
+  }
+
+  const domCount = getCurrentDomPlaylistTrackCount();
+
   if (domCount > 0) {
     createSetsButton(domCount);
     return;
@@ -1441,16 +1546,69 @@ function scheduleSetsScan(delay = 400) {
 }
 
 // Слежение за SPA-навигацией: кнопка должна жить только на /sets/.
+function scheduleSetsRescansAfterNavigation() {
+  const token = ++setsNavigationScanToken;
+
+  SETS_RESCAN_AFTER_NAV_DELAYS_MS.forEach((delay) => {
+    setTimeout(() => {
+      if (token !== setsNavigationScanToken) return;
+      runSetsScanSafely();
+    }, delay);
+  });
+}
+
+// Слежение за SPA-навигацией: кнопка должна жить только на актуальной /sets/ странице.
 function handleSetsSpaNavigation() {
   if (setsLastLocation === window.location.href) return;
 
   setsLastLocation = window.location.href;
-  runSetsScanSafely();
+  setsLastNavigationAt = Date.now();
+
+  // Не даём старой кнопке пережить переход на другой плейлист.
+  removeSetsButton();
+  scheduleSetsRescansAfterNavigation();
+}
+
+function installSetsSpaNavigationHooks() {
+  if (window.__mediaDownloaderSetsNavigationHooksInstalled) return;
+  window.__mediaDownloaderSetsNavigationHooksInstalled = true;
+
+  const originalPushState = history.pushState;
+  const originalReplaceState = history.replaceState;
+
+  function emitLocationChange() {
+    window.dispatchEvent(new Event("mediaDownloaderSetsLocationChange"));
+  }
+
+  history.pushState = function patchedPushState(...args) {
+    const result = originalPushState.apply(this, args);
+    setTimeout(emitLocationChange, 0);
+    return result;
+  };
+
+  history.replaceState = function patchedReplaceState(...args) {
+    const result = originalReplaceState.apply(this, args);
+    setTimeout(emitLocationChange, 0);
+    return result;
+  };
+
+  window.addEventListener("popstate", () => {
+    setTimeout(emitLocationChange, 0);
+  });
+
+  window.addEventListener("hashchange", () => {
+    setTimeout(emitLocationChange, 0);
+  });
+
+  window.addEventListener("mediaDownloaderSetsLocationChange", () => {
+    handleSetsSpaNavigation();
+  });
 }
 
 // Стартовая инициализация + наблюдатели.
 function initSoundCloudSetsButton() {
   injectSetsStyles();
+  installSetsSpaNavigationHooks();
   runSetsScanSafely();
 
   // MutationObserver — реагируем на ре-рендер карточек Ember'ом.
@@ -1465,16 +1623,11 @@ function initSoundCloudSetsButton() {
   });
 
   // Periodic fallback — на случай если MutationObserver пропустил.
-  // Каждые 3с перепроверяем, не появилось ли больше треков.
+  // Каждые 3с перепроверяем, не изменился ли URL и не появились ли треки.
   setInterval(() => {
     handleSetsSpaNavigation();
     scheduleSetsScan(800);
   }, 3000);
-
-  // После SPA-навигации hydration может загружаться задержанно —
-  // делаем несколько re-scan'ов с нарастающим интервалом.
-  const MAX_RESCANS_AFTER_NAV = 5;
-  const RESCAN_BASE_DELAY = 500;
 }
 
 if (document.readyState === "loading") {

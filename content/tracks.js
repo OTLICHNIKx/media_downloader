@@ -414,6 +414,10 @@ function isSoundCloudPlaylistInnerTrackRow(trackElement) {
     return false;
   }
 
+  if (trackElement.hasAttribute("data-media-downloader-inline-playlist-track-row")) {
+    return true;
+  }
+
   return Boolean(
     trackElement.closest("[data-media-downloader-soundcloud-playlist-card]") &&
       trackElement.closest(
@@ -505,6 +509,26 @@ function getSoundCloudTrackActionsContainer(trackElement) {
     return null;
   }
 
+  // Для треков внутри embedded playlist сначала ищем action bar строки.
+  if (isSoundCloudPlaylistInnerTrackRow(trackElement)) {
+    const rowSelectors = [
+      ".trackItem__actions",
+      ".trackItem__additional",
+      ".sc-button-group"
+    ];
+
+    for (const selector of rowSelectors) {
+      const element = trackElement.querySelector(selector);
+
+      if (isUsableSoundCloudActionsContainer(element)) {
+        return element;
+      }
+    }
+
+    // Если у строки нет отдельного action bar — вставляем маленькую кнопку в саму строку.
+    return trackElement;
+  }
+
   const selectors = [
     ".soundActions .sc-button-group",
     ".soundActions",
@@ -532,13 +556,6 @@ function getSoundCloudTrackActionsContainer(trackElement) {
     if (isUsableSoundCloudActionsContainer(element)) {
       return element;
     }
-  }
-
-  // Для треков внутри embedded playlist у SoundCloud часто нет отдельного
-  // action bar, поэтому безопасно вставляем кнопку прямо в строку трека.
-  // Для внешней карточки плейлиста этот fallback НЕ сработает.
-  if (isSoundCloudPlaylistInnerTrackRow(trackElement)) {
-    return trackElement;
   }
 
   return null;
@@ -629,7 +646,7 @@ function addIconOnTrackElement(trackElement, mediaItem) {
 
   if (isSoundCloud) {
     icon.classList.add("media-downloader-soundcloud-track-button");
-  
+
     if (isSoundCloudPlaylistInnerTrackRow(trackElement)) {
       icon.classList.add("media-downloader-soundcloud-playlist-row-button");
     }

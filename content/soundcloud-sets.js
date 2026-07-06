@@ -1827,16 +1827,38 @@ function getInlinePlaylistDomTrackCount(cardElement) {
   return 0;
 }
 
+function isInlinePlaylistTrackRowElement(element) {
+  if (!element || !(element instanceof Element)) {
+    return false;
+  }
+
+  return Boolean(
+    element.closest(
+      [
+        ".trackItem",
+        ".systemPlaylistTrackList__item",
+        ".compactTrackList__item",
+        ".playlist__tracks .trackItem",
+        ".listenDetails__trackList .trackItem"
+      ].join(",")
+    )
+  );
+}
+
 function getInlinePlaylistActionsContainer(cardElement) {
   if (!cardElement || !(cardElement instanceof Element)) {
     return null;
   }
 
+  // ВАЖНО:
+  // Ищем action bar именно внешней карточки плейлиста.
+  // Нельзя брать .trackItem__actions/.trackItem__additional,
+  // иначе кнопка "Скачать плейлист" уедет внутрь первого трека.
   const selectors = [
-    ".soundActions .sc-button-group",
-    ".soundActions",
     ".sound__soundActions .sc-button-group",
     ".sound__soundActions",
+    ".soundActions .sc-button-group",
+    ".soundActions",
     ".soundFooter .sc-button-group",
     ".soundFooter",
     ".listenEngagement__actions",
@@ -1844,14 +1866,19 @@ function getInlinePlaylistActionsContainer(cardElement) {
   ];
 
   for (const selector of selectors) {
-    const element = cardElement.querySelector(selector);
+    const elements = cardElement.querySelectorAll(selector);
 
-    if (!element) continue;
+    for (const element of elements) {
+      // Пропускаем action bar, если он находится внутри строки трека.
+      if (isInlinePlaylistTrackRowElement(element)) {
+        continue;
+      }
 
-    const rect = element.getBoundingClientRect();
+      const rect = element.getBoundingClientRect();
 
-    if (rect.width > 20 && rect.height > 20) {
-      return element;
+      if (rect.width > 20 && rect.height > 20) {
+        return element;
+      }
     }
   }
 
@@ -2033,7 +2060,10 @@ function upsertInlinePlaylistButton(cardElement, playlistInfo) {
 
   if (
     button &&
-    button.getAttribute(SETS_INLINE_URL_ATTRIBUTE) !== playlistInfo.permalinkUrl
+    (
+      button.getAttribute(SETS_INLINE_URL_ATTRIBUTE) !== playlistInfo.permalinkUrl ||
+      button.parentElement !== actionsContainer
+    )
   ) {
     button.remove();
     button = null;
@@ -2087,12 +2117,6 @@ function upsertInlinePlaylistButton(cardElement, playlistInfo) {
   if (button.textContent !== nextText) {
     button.textContent = nextText;
   }
-
-  // ВАЖНО:
-  // Не делаем warmUpInlinePlaylistInfo() автоматически.
-  // Иначе на странице артиста можно запустить десятки SoundCloud API resolve
-  // прямо во время рендера, из-за чего сайт начинает лагать.
-  // Полный resolve делаем только по клику.
 }
 
 function isInlinePlaylistCardNearViewport(cardElement) {
@@ -2196,11 +2220,9 @@ function getInlinePlaylistTrackTitleFromRow(rowElement, trackLink) {
 }
 
 function markInlinePlaylistTrackRowsForSoloDownload(cardElement) {
-  getInlinePlaylistTrackRows(cardElement).forEach((rowElement) => {
-    if (rowElement.hasAttribute("data-media-downloader-track")) {
-      return;
-    }
+  let markedCount = 0;
 
+  getInlinePlaylistTrackRows(cardElement).forEach((rowElement) => {
     const trackLink = getInlinePlaylistTrackLinkFromRow(rowElement);
 
     if (!trackLink) {
@@ -2214,15 +2236,29 @@ function markInlinePlaylistTrackRowsForSoloDownload(cardElement) {
     }
 
     rowElement.setAttribute("data-media-downloader-track", "true");
+    rowElement.setAttribute("data-media-downloader-inline-playlist-track-row", "true");
     rowElement.setAttribute(TRACK_TITLE_ATTRIBUTE, title);
     rowElement.setAttribute(TRACK_AUTHOR_ATTRIBUTE, getInlinePlaylistAuthor(cardElement));
     rowElement.setAttribute(TRACK_ADAPTER_ATTRIBUTE, "soundcloud");
 
-    // Даём tracks.js/restoreTrackButtonsIfMissing() шанс сразу поставить кнопку.
-    if (typeof scheduleMediaDownloaderScan === "function") {
-      scheduleMediaDownloaderScan(300);
-    }
+    markedCount += 1;
   });
+
+  if (markedCount > 0) {
+    if (typeof restoreTrackButtonsIfMissing === "function") {
+      setTimeout(() => {
+        restoreTrackButtonsIfMissing();
+      }, 0);
+
+      setTimeout(() => {
+        restoreTrackButtonsIfMissing();
+      }, 700);
+    }
+
+    if (typeof scheduleMediaDownloaderScan === "function") {
+      scheduleMediaDownloaderScan(500);
+    }
+  }
 }
 
 function scanInlineSoundCloudPlaylistCards() {
@@ -2281,7 +2317,11 @@ function scanInlineSoundCloudPlaylistCards() {
     cardElement
       .querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`)
       .forEach((element) => {
-        if (element.closest(".trackItem, .systemPlaylistTrackList__item, .compactTrackList__item")) {
+        if (
+          element.closest(
+            ".trackItem, .systemPlaylistTrackList__item, .compactTrackList__item"
+          )
+        ) {
           return;
         }
 

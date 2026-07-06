@@ -1189,15 +1189,23 @@ function findTrackContainer(linkElement) {
 //   3. DOM-ссылки /tracks/NNN (фолбэк)
 // Возвращает массив { trackId, title, author }.
 async function collectVisiblePlaylistTracks() {
-  // 1. Hydration data — извлекаем playlistId и tracks (может быть обрезана).
+  // 1. Hydration data — извлекаем playlistId и tracks.
+  // На SPA-переходах hydration может быть пустым/старым, поэтому ниже есть DOM permalink fallback.
   const playlistInfo = extractPlaylistFromHydration();
 
-  // 2. Пробуем получить полный список через API (нужен playlistId + client_id).
+  const expectedTrackCount = Number(
+    playlistInfo?.trackCount ||
+      getCurrentDomPlaylistTrackCount() ||
+      0
+  ) || 0;
+
+  // 2. Пробуем получить полный список через API, если есть актуальный playlistId.
   if (playlistInfo && playlistInfo.playlistId) {
     const apiTracks = await fetchFullPlaylistTracks(playlistInfo);
 
     if (apiTracks && apiTracks.length > 0) {
       const playableApiTracks = apiTracks.filter(isPlayableResolvedTrack);
+
       if (playableApiTracks.length !== apiTracks.length) {
         console.warn(
           `[Media Downloader] Sets: отфильтровано непригодных треков ${apiTracks.length - playableApiTracks.length}/${apiTracks.length}`
@@ -1212,15 +1220,51 @@ async function collectVisiblePlaylistTracks() {
     }
   }
 
-  // 3. Hydration tracks (обрезанные, но лучшие что есть без API).
+  // 3. Hydration tracks, если они есть.
   if (playlistInfo && playlistInfo.tracks.length > 0) {
     console.log(
       `[Media Downloader] Sets: hydration дал ${playlistInfo.tracks.length} трек(ов)`
     );
+
     return playlistInfo.tracks;
   }
 
-  // 4. Фолбэк: ссылки /tracks/NNN в DOM.
+  // 4. Новый основной fallback для SPA:
+  // собираем реальные permalink-ссылки треков вида /artist/track-slug,
+  // потом resolve'им их через api-v2.soundcloud.com/resolve.
+  const clientId = getClientId();
+  const domTracks = await collectAllDomPlaylistTracks(expectedTrackCount);
+
+  if (domTracks.length > 0) {
+    console.log(
+      `[Media Downloader] Sets: DOM permalink fallback дал ${domTracks.length}/${expectedTrackCount || "?"} ссылок`
+    );
+
+    if (!clientId) {
+      console.warn(
+        "[Media Downloader] Sets: client_id не найден, DOM permalink resolve невозможен"
+      );
+
+      return domTracks;
+    }
+
+    const resolvedDomTracks = await resolveDomPlaylistTracks(
+      domTracks,
+      clientId,
+      expectedTrackCount
+    );
+
+    console.log(
+      `[Media Downloader] Sets: DOM permalink resolve дал ${resolvedDomTracks.length}/${expectedTrackCount || "?"} трек(ов)`
+    );
+
+    if (resolvedDomTracks.length > 0) {
+      return enrichPlaylistTracks(resolvedDomTracks, clientId);
+    }
+  }
+
+  // 5. Старый fallback оставляем только как последний шанс:
+  // он работает только для ссылок /tracks/123.
   const trackLinks = document.querySelectorAll("a[href*='/tracks/']");
   const seen = new Set();
   const tracks = [];
@@ -1229,10 +1273,8 @@ async function collectVisiblePlaylistTracks() {
     const href = link.getAttribute("href") || "";
     const trackId = getTrackIdFromHref(href);
 
-    // Пропускаем дубликаты по trackId и ссылки без числового id.
     if (!trackId || seen.has(trackId)) return;
 
-    // Только видимые ссылки (виртуализация SoundCloud может держать скрытые).
     const rect = link.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
 
@@ -1240,15 +1282,23 @@ async function collectVisiblePlaylistTracks() {
     const title = extractTrackTitle(container || link, link);
     const author = extractTrackAuthor(container || link);
 
-    // Без заголовка трек бесполезен в ZIP — пропускаем.
     if (!title) return;
 
     seen.add(trackId);
-    tracks.push({ trackId, title, author: author || "" });
+
+    tracks.push({
+      trackId,
+      trackUrn: `soundcloud:tracks:${trackId}`,
+      title,
+      author: author || "",
+      permalinkUrl: "",
+      hlsUrl: "",
+      trackAuthorization: ""
+    });
   });
 
   console.log(
-    `[Media Downloader] Sets: DOM-fallback дал ${tracks.length} трек(ов)`
+    `[Media Downloader] Sets: legacy DOM /tracks fallback дал ${tracks.length} трек(ов)`
   );
 
   return tracks;

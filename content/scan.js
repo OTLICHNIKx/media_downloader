@@ -355,6 +355,63 @@ function scheduleMediaDownloaderScan(delay = 250) {
   mediaDownloaderScanTimer = setTimeout(runScanSafely, effectiveDelay);
 }
 
+function resetMediaDownloaderTrackStateForNavigation() {
+  // 1. Удаляем все наши кнопки.
+  document.querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}`).forEach((element) => {
+    element.remove();
+  });
+
+  // 2. Снимаем отметки "иконка уже добавлена" с media/link элементов.
+  document.querySelectorAll(`[${ICON_ADDED_ATTRIBUTE}]`).forEach((element) => {
+    element.removeAttribute(ICON_ADDED_ATTRIBUTE);
+    element.classList.remove("media-downloader-audio-with-button");
+  });
+
+  // 3. ВАЖНО:
+  // SoundCloud может переиспользовать DOM-узлы между /all, /tracks, /sets.
+  // Поэтому чистим не только кнопки, но и наши track/capture metadata.
+  const markedTrackElements = document.querySelectorAll(
+    [
+      "[data-media-downloader-track]",
+      `[${TRACK_CAPTURE_ATTRIBUTE}]`,
+      `[${TRACK_BOUND_ATTRIBUTE}]`,
+      `[${TRACK_STREAM_URL_ATTRIBUTE}]`,
+      `[${TRACK_STREAM_TYPE_ATTRIBUTE}]`,
+      `[${TRACK_ADAPTER_ATTRIBUTE}]`
+    ].join(",")
+  );
+
+  markedTrackElements.forEach((element) => {
+    element.removeAttribute("data-media-downloader-track");
+    element.removeAttribute(TRACK_CAPTURE_ATTRIBUTE);
+    element.removeAttribute(TRACK_STREAM_URL_ATTRIBUTE);
+    element.removeAttribute(TRACK_STREAM_TYPE_ATTRIBUTE);
+    element.removeAttribute(TRACK_BOUND_ATTRIBUTE);
+    element.removeAttribute(TRACK_TITLE_ATTRIBUTE);
+    element.removeAttribute(TRACK_AUTHOR_ATTRIBUTE);
+    element.removeAttribute(TRACK_ADAPTER_ATTRIBUTE);
+    element.removeAttribute("data-media-downloader-capturing");
+
+    delete element.dataset.mediaDownloaderLastCaptureAt;
+    delete element.dataset.mediaDownloaderLastHlsCheckAt;
+  });
+
+  mediaDownloaderTrackBindings.clear();
+  mediaDownloaderCaptureToTrackId.clear();
+}
+
+function scheduleMediaDownloaderRescansAfterNavigation() {
+  const token = ++mediaDownloaderNavigationScanToken;
+
+  MEDIA_DOWNLOADER_NAVIGATION_RESCAN_DELAYS_MS.forEach((delay) => {
+    setTimeout(() => {
+      if (token !== mediaDownloaderNavigationScanToken) return;
+
+      runScanSafely();
+    }, delay);
+  });
+}
+
 function handlePossibleSpaNavigation() {
   if (mediaDownloaderLastLocation === window.location.href) {
     return;
@@ -362,66 +419,50 @@ function handlePossibleSpaNavigation() {
 
   mediaDownloaderLastLocation = window.location.href;
 
-  document.querySelectorAll(`[${ICON_ADDED_ATTRIBUTE}]`).forEach((element) => {
-    element.removeAttribute(ICON_ADDED_ATTRIBUTE);
-  });
+  resetMediaDownloaderTrackStateForNavigation();
 
-  document.querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}`).forEach((element) => {
-    element.remove();
-  });
-
-  // Очищаем персистентные привязки треков — на новой странице
-  // они уже неактуальны.
-  mediaDownloaderTrackBindings.clear();
-  mediaDownloaderCaptureToTrackId.clear();
-
-  // Сбрасываем точку отсчёта max-wait под новую страницу, чтобы первый
-  // скан после навигации шёл со своей задержкой, а не форсировался.
+  // Сбрасываем точку отсчёта max-wait под новую страницу.
   mediaDownloaderLastScanRunAt = Date.now();
 
-  scheduleMediaDownloaderScan(400);
-  scheduleMediaDownloaderScan(1200);
+  // SoundCloud рендерит новую вкладку не сразу.
+  // Поэтому делаем серию сканов, а не один scan через debounce.
+  scheduleMediaDownloaderRescansAfterNavigation();
 }
 
 function installSpaNavigationHooks() {
+  if (window.__mediaDownloaderSpaNavigationHooksInstalled) return;
+  window.__mediaDownloaderSpaNavigationHooksInstalled = true;
+
   const originalPushState = history.pushState;
   const originalReplaceState = history.replaceState;
 
+  function afterNavigation() {
+    setTimeout(handlePossibleSpaNavigation, 0);
+    setTimeout(scheduleMediaDownloaderRescansAfterNavigation, 250);
+  }
+
   history.pushState = function patchedPushState(...args) {
     const result = originalPushState.apply(this, args);
-
-    setTimeout(handlePossibleSpaNavigation, 0);
-    setTimeout(() => scheduleMediaDownloaderScan(600), 600);
-
+    afterNavigation();
     return result;
   };
 
   history.replaceState = function patchedReplaceState(...args) {
     const result = originalReplaceState.apply(this, args);
-
-    setTimeout(handlePossibleSpaNavigation, 0);
-    setTimeout(() => scheduleMediaDownloaderScan(600), 600);
-
+    afterNavigation();
     return result;
   };
 
-  window.addEventListener("popstate", () => {
-    handlePossibleSpaNavigation();
-    scheduleMediaDownloaderScan(600);
-  });
-
-  window.addEventListener("hashchange", () => {
-    handlePossibleSpaNavigation();
-    scheduleMediaDownloaderScan(600);
-  });
+  window.addEventListener("popstate", afterNavigation);
+  window.addEventListener("hashchange", afterNavigation);
 
   window.addEventListener("pageshow", () => {
-    scheduleMediaDownloaderScan(300);
+    scheduleMediaDownloaderRescansAfterNavigation();
   });
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
-      scheduleMediaDownloaderScan(300);
+      scheduleMediaDownloaderRescansAfterNavigation();
     }
   });
 }

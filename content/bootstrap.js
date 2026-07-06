@@ -166,9 +166,7 @@ installSpaNavigationHooks();
 // задержкой, а не форсировался по cap.
 mediaDownloaderLastScanRunAt = Date.now();
 
-scheduleMediaDownloaderScan(100);
-scheduleMediaDownloaderScan(800);
-scheduleMediaDownloaderScan(1800);
+scheduleMediaDownloaderRescansAfterNavigation();
 
 const observer = new MutationObserver(() => {
   handlePossibleSpaNavigation();

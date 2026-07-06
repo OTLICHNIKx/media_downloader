@@ -17,6 +17,16 @@ let mediaDownloaderLastLocation = window.location.href;
 // Нужен для bounded debounce (max-wait cap) в scheduleMediaDownloaderScan,
 // чтобы частые DOM-мутации не откладывали скан бесконечно.
 let mediaDownloaderLastScanRunAt = 0;
+const MEDIA_DOWNLOADER_NAVIGATION_RESCAN_DELAYS_MS = [
+  0,
+  150,
+  400,
+  900,
+  1600,
+  3000,
+  5000
+];
+
 const MEDIA_DOWNLOADER_FALLBACK_ATTRIBUTE = "data-media-downloader-fallback-id";
 let mediaDownloaderUiEnabled = true;
 let mediaDownloaderLastDiagnosticReportAt = 0;

@@ -5,7 +5,48 @@ function createCaptureId() {
 function findTrackCandidateFromTarget(target) {
   if (!target || !(target instanceof Element)) return null;
 
-  return target.closest("[data-media-downloader-track]");
+  const existingTrack = target.closest("[data-media-downloader-track]");
+  if (existingTrack) return existingTrack;
+
+  // SPA fallback:
+  // пользователь может нажать play раньше, чем MutationObserver успел
+  // пометить новую SoundCloud-карточку как data-media-downloader-track.
+  try {
+    const adapter =
+      typeof getCurrentSiteMediaAdapter === "function"
+        ? getCurrentSiteMediaAdapter()
+        : null;
+
+    if (!adapter || !Array.isArray(adapter.cardSelectors) || adapter.cardSelectors.length === 0) {
+      return null;
+    }
+
+    const candidate = target.closest(adapter.cardSelectors.join(","));
+    if (!candidate) return null;
+
+    if (candidate.closest(`.${MEDIA_DOWNLOADER_ICON_CLASS}`)) {
+      return null;
+    }
+
+    const metadata =
+      typeof getAdapterMetadata === "function"
+        ? getAdapterMetadata(candidate, adapter)
+        : null;
+
+    if (!metadata || !metadata.title) {
+      return null;
+    }
+
+    if (typeof markAdapterTrackCandidate === "function") {
+      markAdapterTrackCandidate(candidate, adapter, metadata);
+    }
+
+    return candidate.matches("[data-media-downloader-track]")
+      ? candidate
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function getOrCreateTrackCaptureId(trackElement) {
@@ -124,30 +165,70 @@ function getSoundCloudTrackPermalinkFromTrackElement(trackElement) {
     ".soundTitle__title a[href]",
     ".trackItem__trackTitle[href]",
     ".trackItem__trackTitle a[href]",
-    "a[itemprop='url'][href]"
+    "a[itemprop='url'][href]",
+
+    // Fallback для новых SoundCloud карточек:
+    // часто трек лежит как /artist/track-slug, а не /tracks/123.
+    "a[href^='/'][href]",
+    "a[href*='soundcloud.com/'][href]"
   ];
+
+  const seenLinks = new Set();
 
   for (const selector of selectors) {
     const links = trackElement.querySelectorAll(selector);
 
     for (const link of links) {
       const href = link.getAttribute("href") || "";
-      if (!href) continue;
+      if (!href || seenLinks.has(href)) continue;
+
+      seenLinks.add(href);
 
       try {
         const url = new URL(href, window.location.origin);
 
         if (!url.hostname.includes("soundcloud.com")) continue;
 
-        const parts = url.pathname.split("/").filter(Boolean);
+        url.hash = "";
+        url.search = "";
 
-        if (parts.length < 2) continue;
-        if (url.pathname.includes("/sets/")) continue;
-        if (url.pathname.includes("/likes")) continue;
-        if (url.pathname.includes("/reposts")) continue;
-        if (url.pathname.includes("/comments")) continue;
+        const parts = url.pathname
+          .split("/")
+          .map((part) => part.trim())
+          .filter(Boolean);
 
-        return url.href.split("?")[0].split("#")[0];
+        // Трековый permalink SoundCloud обычно: /artist/track-slug.
+        if (parts.length !== 2) continue;
+
+        const [userSlug, trackSlug] = parts;
+
+        if (!userSlug || !trackSlug) continue;
+
+        const blockedFirstParts = new Set([
+          "discover",
+          "search",
+          "you",
+          "messages",
+          "notifications",
+          "settings",
+          "upload",
+          "pages",
+          "terms-of-use",
+          "privacy"
+        ]);
+
+        if (blockedFirstParts.has(userSlug)) continue;
+
+        if (
+          trackSlug === "sets" ||
+          trackSlug === "likes" ||
+          trackSlug === "reposts" ||
+          trackSlug === "comments"
+        ) {
+          continue;
+        }
+
+        return url.href;
       } catch {
         // ignore
       }
@@ -185,13 +266,38 @@ function getSoundCloudClientIdForSoloTrack() {
 }
 
 // Ищет трек-карточку по SoundCloud trackId среди видимых [data-media-downloader-track].
-function findTrackElementByTrackId(trackId) {
-  if (!trackId) return null;
+function getSoundCloudTrackKeyFromTrackElement(trackElement) {
+  const trackId = getSoundCloudTrackIdFromTrackElement(trackElement);
+
+  if (trackId) {
+    return `id:${trackId}`;
+  }
+
+  const permalinkUrl = getSoundCloudTrackPermalinkFromTrackElement(trackElement);
+
+  if (permalinkUrl) {
+    return `url:${permalinkUrl}`;
+  }
+
+  return "";
+}
+
+// Название оставляем старым, чтобы не менять bootstrap.js.
+// Но теперь функция умеет искать не только по numeric trackId,
+// а и по permalink-key вида url:https://soundcloud.com/artist/track.
+function findTrackElementByTrackId(trackIdOrKey) {
+  if (!trackIdOrKey) return null;
+
+  const rawKey = String(trackIdOrKey);
+  const expectedKey =
+    rawKey.startsWith("id:") || rawKey.startsWith("url:")
+      ? rawKey
+      : `id:${rawKey}`;
 
   const trackElements = document.querySelectorAll("[data-media-downloader-track]");
 
   for (const element of trackElements) {
-    if (getSoundCloudTrackIdFromTrackElement(element) === trackId) {
+    if (getSoundCloudTrackKeyFromTrackElement(element) === expectedKey) {
       return element;
     }
   }
@@ -213,13 +319,16 @@ function startStreamCaptureForTrack(trackElement, reason = "interaction") {
 
   const captureId = getOrCreateTrackCaptureId(trackElement);
   const trackTitle = getTrackTitle(trackElement);
+
+  // Numeric id оставляем для background-фильтрации prefetch соседних треков.
   const expectedTrackId = getSoundCloudTrackIdFromTrackElement(trackElement);
 
-  // Запоминаем captureId → trackId, чтобы при ре-рендере Ember
-  // (когда DOM-узел с captureId выброшен) можно было найти новую
-  // карточку по trackId.
-  if (expectedTrackId) {
-    mediaDownloaderCaptureToTrackId.set(captureId, expectedTrackId);
+  // А для восстановления DOM-карточки используем более устойчивый ключ:
+  // numeric id или permalink.
+  const trackKey = getSoundCloudTrackKeyFromTrackElement(trackElement);
+
+  if (trackKey) {
+    mediaDownloaderCaptureToTrackId.set(captureId, trackKey);
   }
 
   chrome.runtime.sendMessage(
@@ -254,20 +363,20 @@ function startStreamCaptureForTrack(trackElement, reason = "interaction") {
 function rememberTrackBinding(trackElement, mediaItem) {
   if (!trackElement || !mediaItem) return;
 
-  const trackId = getSoundCloudTrackIdFromTrackElement(trackElement);
-  if (!trackId) return;
+  const trackKey = getSoundCloudTrackKeyFromTrackElement(trackElement);
+  if (!trackKey) return;
 
-  mediaDownloaderTrackBindings.set(trackId, mediaItem);
+  mediaDownloaderTrackBindings.set(trackKey, mediaItem);
 }
 
 // Возвращает сохранённый mediaItem по trackId карточки.
 function getBoundMediaItemForTrackElement(trackElement) {
   if (!trackElement) return null;
 
-  const trackId = getSoundCloudTrackIdFromTrackElement(trackElement);
-  if (!trackId) return null;
+  const trackKey = getSoundCloudTrackKeyFromTrackElement(trackElement);
+  if (!trackKey) return null;
 
-  return mediaDownloaderTrackBindings.get(trackId) || null;
+  return mediaDownloaderTrackBindings.get(trackKey) || null;
 }
 
 function addIconOnTrackElement(trackElement, mediaItem) {

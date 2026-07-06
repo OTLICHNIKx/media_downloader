@@ -634,11 +634,322 @@ function enrichMediaItemWithTrackMetadata(mediaItem, trackElement) {
   return enriched;
 }
 
+const soloSoundCloudResolvedTrackCache = new Map();
+const soloSoundCloudResolveInFlight = new Set();
+const soloSoundCloudResolveFailedAt = new Map();
+
+function isSoundCloudTrackNearViewport(trackElement) {
+  if (!trackElement || !(trackElement instanceof Element)) return false;
+
+  const rect = trackElement.getBoundingClientRect();
+
+  return (
+    rect.width > 20 &&
+    rect.height > 20 &&
+    rect.bottom >= -400 &&
+    rect.top <= window.innerHeight + 1800
+  );
+}
+
+function soloSoundCloudAppendUrlParams(url, params) {
+  const parsedUrl = new URL(url, window.location.href);
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (!value || parsedUrl.searchParams.has(key)) return;
+    parsedUrl.searchParams.set(key, value);
+  });
+
+  return parsedUrl.href;
+}
+
+async function soloSoundCloudFetchJson(url) {
+  const response = await fetch(url, {
+    credentials: "include"
+  });
+
+  if (!response.ok) {
+    throw new Error(`SoundCloud API HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function soloSoundCloudFindStringValueByKeyDeep(value, keyMatchers, depth = 0, seen = new Set()) {
+  if (!value || typeof value !== "object" || depth > 6 || seen.has(value)) {
+    return "";
+  }
+
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = soloSoundCloudFindStringValueByKeyDeep(
+        item,
+        keyMatchers,
+        depth + 1,
+        seen
+      );
+
+      if (found) return found;
+    }
+
+    return "";
+  }
+
+  for (const [key, item] of Object.entries(value)) {
+    if (
+      keyMatchers.some((matcher) => matcher.test(key)) &&
+      (typeof item === "string" || typeof item === "number") &&
+      String(item)
+    ) {
+      return String(item);
+    }
+
+    const nested = soloSoundCloudFindStringValueByKeyDeep(
+      item,
+      keyMatchers,
+      depth + 1,
+      seen
+    );
+
+    if (nested) return nested;
+  }
+
+  return "";
+}
+
+function soloSoundCloudGetTrackAuthorization(track) {
+  return soloSoundCloudFindStringValueByKeyDeep(track, [
+    /^track_authorization$/i,
+    /^trackAuthorization$/i
+  ]);
+}
+
+function soloSoundCloudGetTrackIdFromApiTrack(track) {
+  if (!track) return "";
+
+  if (typeof track.id === "number" || typeof track.id === "string") {
+    return String(track.id);
+  }
+
+  const urn = track.urn || track.track_urn || "";
+  const match = String(urn).match(/soundcloud:tracks:(\d+)/i);
+
+  return match && match[1] ? match[1] : "";
+}
+
+function soloSoundCloudGetTrackDurationMs(track) {
+  return Number(
+    track?.duration ||
+      track?.full_duration ||
+      track?.fullDuration ||
+      track?.publisher_metadata?.duration ||
+      0
+  ) || 0;
+}
+
+function soloSoundCloudIsSnippedTranscoding(transcoding) {
+  const markerText = [
+    transcoding?.preset,
+    transcoding?.quality,
+    transcoding?.url,
+    transcoding?.format?.mime_type,
+    transcoding?.format?.protocol
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    transcoding?.snipped === true ||
+    markerText.includes("preview") ||
+    markerText.includes("snippet") ||
+    markerText.includes("snipped")
+  );
+}
+
+function soloSoundCloudScoreHlsTranscoding(transcoding, trackDurationMs) {
+  const mime = String(transcoding?.format?.mime_type || "").toLowerCase();
+  const preset = String(transcoding?.preset || "").toLowerCase();
+  const duration = Number(transcoding?.duration || 0) || 0;
+
+  let score = 0;
+
+  if (!soloSoundCloudIsSnippedTranscoding(transcoding)) score += 1000;
+  if (mime.includes("audio/aac")) score += 200;
+  if (preset.includes("aac_160k")) score += 120;
+  if (mime.includes("audio/mpeg")) score += 80;
+
+  if (trackDurationMs && duration) {
+    const ratio = duration / trackDurationMs;
+
+    if (ratio >= 0.9 && ratio <= 1.1) score += 300;
+    else if (ratio >= 0.6) score += 100;
+    else if (ratio < 0.4) score -= 500;
+  }
+
+  return score;
+}
+
+function soloSoundCloudGetBestHlsTranscoding(track) {
+  const transcodings = track?.media?.transcodings;
+
+  if (!Array.isArray(transcodings)) {
+    return null;
+  }
+
+  const hlsTranscodings = transcodings.filter((transcoding) => {
+    return (
+      transcoding?.url &&
+      String(transcoding?.format?.protocol || "").toLowerCase() === "hls" &&
+      !soloSoundCloudIsSnippedTranscoding(transcoding)
+    );
+  });
+
+  if (hlsTranscodings.length === 0) {
+    return null;
+  }
+
+  const trackDurationMs = soloSoundCloudGetTrackDurationMs(track);
+
+  return [...hlsTranscodings].sort((a, b) => {
+    return (
+      soloSoundCloudScoreHlsTranscoding(b, trackDurationMs) -
+      soloSoundCloudScoreHlsTranscoding(a, trackDurationMs)
+    );
+  })[0] || null;
+}
+
+async function soloSoundCloudResolvePlaylistUrlFromTranscoding(transcoding, clientId, trackAuthorization) {
+  if (!transcoding?.url || !clientId) {
+    return "";
+  }
+
+  const mediaUrl = soloSoundCloudAppendUrlParams(transcoding.url, {
+    client_id: clientId,
+    track_authorization: trackAuthorization
+  });
+
+  const data = await soloSoundCloudFetchJson(mediaUrl);
+
+  return String(data?.url || "");
+}
+
+async function resolveSoloSoundCloudTrackMediaItemFromApi(trackElement) {
+  const trackKey = getSoundCloudTrackKeyFromTrackElement(trackElement);
+  const permalinkUrl = getSoundCloudTrackPermalinkFromTrackElement(trackElement);
+  const clientId = getSoundCloudClientIdForSoloTrack();
+
+  if (!trackKey || !permalinkUrl || !clientId) {
+    return null;
+  }
+
+  if (soloSoundCloudResolvedTrackCache.has(trackKey)) {
+    return soloSoundCloudResolvedTrackCache.get(trackKey);
+  }
+
+  const resolveUrl =
+    `https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(permalinkUrl)}` +
+    `&client_id=${encodeURIComponent(clientId)}`;
+
+  const trackData = await soloSoundCloudFetchJson(resolveUrl);
+
+  if (trackData?.kind && trackData.kind !== "track") {
+    throw new Error(`Resolved object is not track: ${trackData.kind}`);
+  }
+
+  const trackAuthorization = soloSoundCloudGetTrackAuthorization(trackData);
+  const bestTranscoding = soloSoundCloudGetBestHlsTranscoding(trackData);
+
+  if (!bestTranscoding) {
+    throw new Error("No HLS transcoding found");
+  }
+
+  const playlistUrl = await soloSoundCloudResolvePlaylistUrlFromTranscoding(
+    bestTranscoding,
+    clientId,
+    trackAuthorization
+  );
+
+  if (!playlistUrl) {
+    throw new Error("No HLS playlist URL returned");
+  }
+
+  const trackId = soloSoundCloudGetTrackIdFromApiTrack(trackData);
+
+  const mediaItem = buildStreamMediaItem(
+    {
+      url: playlistUrl,
+      type: "hls",
+      extension: "m3u8",
+      isManifestLike: true,
+      isFragmentLike: false,
+      contentType: "application/vnd.apple.mpegurl",
+      soundCloudTrackId: trackId,
+      soundCloudPermalinkUrl: permalinkUrl,
+      soundCloudClientId: clientId
+    },
+    "soundcloud-api-resolve"
+  );
+
+  if (!mediaItem) {
+    return null;
+  }
+
+  const enrichedMediaItem = enrichMediaItemWithTrackMetadata(
+    mediaItem,
+    trackElement
+  );
+
+  soloSoundCloudResolvedTrackCache.set(trackKey, enrichedMediaItem);
+
+  return enrichedMediaItem;
+}
+
+function maybeResolveMissingSoloSoundCloudButton(trackElement) {
+  if (!isSoundCloudTrackButtonContext(trackElement)) return;
+
+  const trackKey = getSoundCloudTrackKeyFromTrackElement(trackElement);
+  if (!trackKey) return;
+
+  if (mediaDownloaderTrackBindings.has(trackKey)) return;
+  if (soloSoundCloudResolveInFlight.has(trackKey)) return;
+
+  const failedAt = Number(soloSoundCloudResolveFailedAt.get(trackKey) || 0);
+  if (failedAt && Date.now() - failedAt < 30000) return;
+
+  if (!isSoundCloudTrackNearViewport(trackElement)) return;
+
+  soloSoundCloudResolveInFlight.add(trackKey);
+
+  resolveSoloSoundCloudTrackMediaItemFromApi(trackElement)
+    .then((mediaItem) => {
+      if (!mediaItem) return;
+
+      const currentTrackElement = findTrackElementByTrackId(trackKey) || trackElement;
+
+      if (!currentTrackElement || !document.documentElement.contains(currentTrackElement)) {
+        return;
+      }
+
+      addIconOnTrackElement(currentTrackElement, mediaItem);
+    })
+    .catch((error) => {
+      soloSoundCloudResolveFailedAt.set(trackKey, Date.now());
+
+      console.warn(
+        "[Media Downloader] Solo SoundCloud API resolve failed:",
+        error?.message || error
+      );
+    })
+    .finally(() => {
+      soloSoundCloudResolveInFlight.delete(trackKey);
+    });
+}
+
 // Восстанавливает кнопки скачивания на трек-карточках, которые потеряли их
 // из-за ре-рендера/виртуализации SoundCloud. Вызывается после каждого скана.
 function restoreTrackButtonsIfMissing() {
-  if (mediaDownloaderTrackBindings.size === 0) return;
-
   document.querySelectorAll("[data-media-downloader-track]").forEach((trackElement) => {
     const existingIcon = trackElement.querySelector(
       `.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
@@ -656,8 +967,15 @@ function restoreTrackButtonsIfMissing() {
     }
 
     const boundItem = getBoundMediaItemForTrackElement(trackElement);
-    if (!boundItem) return;
 
-    addIconOnTrackElement(trackElement, boundItem);
+    if (boundItem) {
+      addIconOnTrackElement(trackElement, boundItem);
+      return;
+    }
+
+    // После F5 SoundCloud иногда уже загрузил поток до того,
+    // как capture успел привязаться к карточке.
+    // Тогда восстанавливаем кнопку через api-v2 resolve по permalink.
+    maybeResolveMissingSoloSoundCloudButton(trackElement);
   });
 }

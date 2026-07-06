@@ -694,17 +694,17 @@ async function fetchPlaylistObjectTracks(playlistRef, clientId, representation) 
   };
 }
 
-async function fetchPlaylistTracksEndpoint(playlistRef, clientId) {
+async function fetchPlaylistTracksEndpoint(playlistRef, clientId, representation = "compact") {
   const firstUrl =
     `https://api-v2.soundcloud.com/playlists/${encodeSoundCloudRefForPath(playlistRef)}/tracks` +
     `?client_id=${encodeURIComponent(clientId)}` +
     `&limit=200` +
     `&linked_partitioning=true` +
-    `&representation=compact` +
+    `&representation=${encodeURIComponent(representation)}` +
     `&app_locale=en`;
 
   console.log(
-    `[Media Downloader] Sets: пробую /playlists/${playlistRef}/tracks`
+    `[Media Downloader] Sets: пробую /playlists/${playlistRef}/tracks representation=${representation}`
   );
 
   const rawTrackItems = await fetchAllSoundCloudCollection(firstUrl, clientId);
@@ -985,7 +985,10 @@ async function resolveDomPlaylistTracks(domTracks, clientId, expectedTrackCount 
   return tracks;
 }
 
-async function fetchFullPlaylistTracks(playlistInfoOrId) {
+async function fetchFullPlaylistTracks(playlistInfoOrId, options = {}) {
+  const allowDomFallback = options.allowDomFallback !== false;
+  const allowPartialApiFallback = options.allowPartialApiFallback !== false;
+
   try {
     const clientId = getClientId();
     if (!clientId) return null;
@@ -999,91 +1002,141 @@ async function fetchFullPlaylistTracks(playlistInfoOrId) {
     }
 
     let compactTracks = [];
+    let endpointTracks = [];
+
     let expectedTrackCount =
       typeof playlistInfoOrId === "object"
         ? Number(playlistInfoOrId?.trackCount || 0)
         : 0;
 
-    // 1. Сначала берём playlist object только ради track_count и первых tracks.
-    // ВАЖНО: если tracks меньше track_count — НЕ возвращаем сразу.
+    // 1. Берём playlist object ради track_count и возможного списка tracks.
+    // Пробуем compact и full, потому что SoundCloud иногда отдаёт разные поля.
     for (const playlistRef of playlistRefs) {
-      try {
-        const compactResult = await fetchPlaylistObjectTracks(
-          playlistRef,
-          clientId,
-          "compact"
-        );
+      for (const representation of ["compact", "full"]) {
+        try {
+          const result = await fetchPlaylistObjectTracks(
+            playlistRef,
+            clientId,
+            representation
+          );
 
-        if (compactResult.tracks.length > compactTracks.length) {
-          compactTracks = compactResult.tracks;
-        }
+          if (result.tracks.length > compactTracks.length) {
+            compactTracks = result.tracks;
+          }
 
-        if (compactResult.trackCount > expectedTrackCount) {
-          expectedTrackCount = compactResult.trackCount;
-        }
+          if (result.trackCount > expectedTrackCount) {
+            expectedTrackCount = result.trackCount;
+          }
 
-        if (expectedTrackCount > 0) {
-          break;
+          if (
+            expectedTrackCount > 0 &&
+            compactTracks.length >= expectedTrackCount
+          ) {
+            return enrichPlaylistTracks(
+              dedupePlaylistTracks(compactTracks),
+              clientId
+            );
+          }
+        } catch (error) {
+          console.warn(
+            `[Media Downloader] Sets: playlist object ${representation} failed for ${playlistRef}:`,
+            error?.message || error
+          );
         }
-      } catch (error) {
-        console.warn(
-          `[Media Downloader] Sets: compact failed for ${playlistRef}:`,
-          error?.message || error
-        );
+      }
+
+      if (expectedTrackCount > 0) {
+        break;
       }
     }
 
-    // 2. Если playlist object дал 5/16 — обязательно пробуем /tracks endpoint.
+    // 2. Основной путь для полного списка: /playlists/{id}/tracks.
+    // Для inline-плейлистов это должен быть единственный полный источник.
     for (const playlistRef of playlistRefs) {
-      try {
-        const tracks = await fetchPlaylistTracksEndpoint(playlistRef, clientId);
+      for (const representation of ["compact", "full"]) {
+        try {
+          const tracks = await fetchPlaylistTracksEndpoint(
+            playlistRef,
+            clientId,
+            representation
+          );
 
-        console.log(
-          `[Media Downloader] Sets: /playlists/${playlistRef}/tracks дал ${tracks.length} трек(ов), expected=${expectedTrackCount || "?"}`
-        );
+          console.log(
+            `[Media Downloader] Sets: /playlists/${playlistRef}/tracks representation=${representation} дал ${tracks.length} трек(ов), expected=${expectedTrackCount || "?"}`
+          );
 
-        if (
-          tracks.length > compactTracks.length ||
-          (expectedTrackCount && tracks.length >= expectedTrackCount)
-        ) {
-          return enrichPlaylistTracks(tracks, clientId);
+          if (tracks.length > endpointTracks.length) {
+            endpointTracks = tracks;
+          }
+
+          if (
+            expectedTrackCount > 0 &&
+            tracks.length >= expectedTrackCount
+          ) {
+            return enrichPlaylistTracks(tracks, clientId);
+          }
+        } catch (error) {
+          console.error(
+            `[Media Downloader] Sets: /playlists/${playlistRef}/tracks representation=${representation} failed:`,
+            error?.message || error
+          );
         }
-      } catch (error) {
-        console.error(
-          `[Media Downloader] Sets: /playlists/${playlistRef}/tracks failed:`,
-          error?.message || error
-        );
       }
     }
 
-    // 3. пробуем собрать все permalink'и из DOM через автоскролл.
-    if (expectedTrackCount && compactTracks.length < expectedTrackCount) {
+    const bestApiTracks =
+      endpointTracks.length > compactTracks.length
+        ? endpointTracks
+        : compactTracks;
+
+    // 3. DOM-scroll fallback разрешён только на реальной странице /sets/.
+    // На странице артиста он собирает чужие треки и двигает страницу.
+    if (
+      allowDomFallback &&
+      isSoundCloudSetsPage() &&
+      expectedTrackCount &&
+      bestApiTracks.length < expectedTrackCount
+    ) {
       const domTracks = await collectAllDomPlaylistTracks(expectedTrackCount);
 
-      if (domTracks.length > compactTracks.length) {
+      if (domTracks.length > bestApiTracks.length) {
         const resolvedDomTracks = await resolveDomPlaylistTracks(
           domTracks,
           clientId,
           expectedTrackCount
         );
+
         console.log(
           `[Media Downloader] Sets: DOM-resolve дал ${resolvedDomTracks.length}/${expectedTrackCount} трек(ов)`
         );
 
-        if (resolvedDomTracks.length > compactTracks.length) {
+        if (resolvedDomTracks.length > bestApiTracks.length) {
           return enrichPlaylistTracks(resolvedDomTracks, clientId);
         }
       }
     }
 
-    // 4. Только теперь fallback на compact.
-    if (compactTracks.length > 0) {
+    // 4. Если это inline playlist-card, неполный API-результат лучше считать ошибкой,
+    // чем скачать неправильные/неполные треки.
+    if (
+      bestApiTracks.length > 0 &&
+      !allowPartialApiFallback &&
+      expectedTrackCount &&
+      bestApiTracks.length < expectedTrackCount
+    ) {
+      throw new Error(
+        `SoundCloud API вернул только ${bestApiTracks.length} из ${expectedTrackCount} треков`
+      );
+    }
+
+    // 5. Последний fallback на лучший API-результат.
+    if (bestApiTracks.length > 0) {
       console.warn(
-        `[Media Downloader] Sets: полный список не найден, беру compact fallback ${compactTracks.length}/${expectedTrackCount || "?"}`
+        `[Media Downloader] Sets: беру лучший API fallback ${bestApiTracks.length}/${expectedTrackCount || "?"}`
       );
 
       return enrichPlaylistTracks(
-        dedupePlaylistTracks(compactTracks),
+        dedupePlaylistTracks(bestApiTracks),
         clientId
       );
     }
@@ -1095,7 +1148,7 @@ async function fetchFullPlaylistTracks(playlistInfoOrId) {
       error?.message || error
     );
 
-    return null;
+    throw error;
   }
 }
 
@@ -1637,22 +1690,35 @@ async function openInlinePlaylistDownloader(playlistInfo) {
     throw new Error("client_id не найден");
   }
 
-  const resolvedInfo = playlistInfo.playlistId
-    ? playlistInfo
-    : await resolveInlinePlaylistInfo(playlistInfo.permalinkUrl, playlistInfo);
+  // Для embedded playlist всегда сначала resolve'им конкретную /sets/... ссылку.
+  // Так мы получаем настоящий playlist id/urn, а не текущую страницу артиста.
+  const resolvedInfo = await resolveInlinePlaylistInfo(
+    playlistInfo.permalinkUrl,
+    playlistInfo
+  );
 
-  let tracks = null;
+  const tracks = await fetchFullPlaylistTracks(resolvedInfo, {
+    // ВАЖНО:
+    // Inline playlist находится на странице артиста/search/all.
+    // Там нельзя использовать DOM-scroll fallback — он соберёт треки страницы,
+    // а не треки конкретного плейлиста.
+    allowDomFallback: false,
 
-  if (resolvedInfo.playlistId) {
-    tracks = await fetchFullPlaylistTracks(resolvedInfo);
-  }
-
-  if ((!tracks || tracks.length === 0) && resolvedInfo.tracks?.length > 0) {
-    tracks = resolvedInfo.tracks;
-  }
+    // Для embedded плейлиста лучше показать ошибку, чем скачать 10/16 чужих
+    // или неполных треков.
+    allowPartialApiFallback: false
+  });
 
   if (!tracks || tracks.length === 0) {
-    throw new Error("Треки плейлиста не найдены");
+    throw new Error("Треки плейлиста не найдены через SoundCloud API");
+  }
+
+  const expectedTrackCount = Number(resolvedInfo.trackCount || playlistInfo.trackCount || 0) || 0;
+
+  if (expectedTrackCount && tracks.length < expectedTrackCount) {
+    throw new Error(
+      `Найдено только ${tracks.length} из ${expectedTrackCount} треков плейлиста`
+    );
   }
 
   const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -1674,8 +1740,14 @@ async function openInlinePlaylistDownloader(playlistInfo) {
   await setChromeStorageLocal({
     [storageKey]: {
       tracks: batchTracks,
-      playlistTitle: resolvedInfo.playlistTitle || playlistInfo.playlistTitle || "playlist",
-      playlistAuthor: resolvedInfo.playlistAuthor || playlistInfo.playlistAuthor || "",
+      playlistTitle:
+        resolvedInfo.playlistTitle ||
+        playlistInfo.playlistTitle ||
+        "playlist",
+      playlistAuthor:
+        resolvedInfo.playlistAuthor ||
+        playlistInfo.playlistAuthor ||
+        "",
       clientId,
       createdAt: Date.now()
     }

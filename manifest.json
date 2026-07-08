@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Simple Media Downloader",
-  "version": "0.1.0",
-  "description": "Finds direct media links and open HLS streams on the current page.",
+  "name": "OTLICHNIK MEDIA DOWNLOADER",
+  "version": "0.2.0",
+  "description": "Finds open media streams on the current page and helps save files you are allowed to keep.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -14,8 +14,14 @@
     "<all_urls>"
   ],
   "action": {
-    "default_title": "Media Downloader",
-    "default_popup": "popup/popup.html"
+    "default_title": "OTLICHNIK MEDIA DOWNLOADER",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png",
+      "48": "assets/icons/icon-48.png",
+      "128": "assets/icons/icon-128.png"
+    }
   },
   "background": {
     "service_worker": "background.js",
@@ -63,5 +69,12 @@
       ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "short_name": "Media Downloader",
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  }
 }

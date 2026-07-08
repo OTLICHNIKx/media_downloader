@@ -2,37 +2,48 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>Media Downloader</title>
+  <title>OTLICHNIK Media Downloader</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <main class="popup">
-    <div class="header">
-      <div>
-        <h1>Media Downloader</h1>
+    <header class="hero">
+      <div class="brand-mark" aria-hidden="true">
+        <span></span>
+      </div>
+      <div class="brand-copy">
+        <p class="eyebrow">OTLICHNIK Media Downloader</p>
+        <h1>Медиа на этой странице</h1>
         <p id="siteHost" class="site-host">Текущий сайт</p>
       </div>
+    </header>
 
+    <section class="status-card" aria-label="Состояние расширения">
+      <div>
+        <span class="status-label">Состояние</span>
+        <p id="status" class="status"></p>
+      </div>
       <button id="openPanelButton" class="panel-button" type="button">
-        Панель
+        Открыть панель
       </button>
-    </div>
+    </section>
 
     <label class="toggle-row">
       <span class="toggle-text">
-        <span class="toggle-title">Отключить на этом сайте</span>
-        <span class="toggle-subtitle">Скрыть кнопки скачивания</span>
+        <span class="toggle-title">Скрыть кнопки на этом сайте</span>
+        <span class="toggle-subtitle">Логика поиска останется доступной в панели</span>
       </span>
-
       <input id="siteToggle" class="toggle-input" type="checkbox">
       <span class="toggle-visual"></span>
     </label>
 
-    <p id="status" class="status"></p>
-        <section class="popup-section">
+    <section class="popup-section streams-section">
       <div class="section-header">
-        <h2>Найденные потоки <span id="streamsCounter" class="counter">0</span></h2>
-        <button id="refreshButton" class="small-button" type="button">Rescan</button>
+        <div>
+          <span class="section-kicker">Streams</span>
+          <h2>Найденные потоки <span id="streamsCounter" class="counter">0</span></h2>
+        </div>
+        <button id="refreshButton" class="small-button" type="button">Обновить</button>
       </div>
 
       <div class="stream-filters" aria-label="Фильтры потоков">
@@ -41,21 +52,28 @@
         <button class="filter-chip" type="button" data-stream-filter="video">Video</button>
         <button class="filter-chip" type="button" data-stream-filter="stream">Stream</button>
       </div>
+
       <div id="streamsList" class="list-box empty">
         Пока ничего не найдено. Запусти воспроизведение на странице и обнови popup.
       </div>
     </section>
 
-    <section class="popup-section">
-      <div class="section-header">
-        <h2>Диагностика</h2>
-        <button id="clearButton" class="small-button" type="button">Очистить</button>
-      </div>
+    <details class="popup-section diagnostics-section">
+      <summary class="details-header">
+        <span>
+          <span class="section-kicker">Developer</span>
+          <strong>Диагностика</strong>
+        </span>
+        <span class="details-chevron" aria-hidden="true">⌄</span>
+      </summary>
 
-      <div id="diagnosticsList" class="list-box empty">
-        Диагностики пока нет.
+      <div class="details-body">
+        <button id="clearButton" class="small-button secondary" type="button">Очистить диагностику</button>
+        <div id="diagnosticsList" class="list-box empty">
+          Диагностики пока нет.
+        </div>
       </div>
-    </section>
+    </details>
   </main>
 
   <script type="module" src="modules/index.js"></script>

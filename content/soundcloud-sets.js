@@ -136,6 +136,73 @@ function injectSetsStyles() {
     .media-downloader-ui-disabled .media-downloader-sets-button {
       display: none !important;
     }
+    
+        .media-downloader-inline-sets-slot {
+      display: inline-flex !important;
+      align-items: center !important;
+      margin-left: 8px !important;
+      vertical-align: middle !important;
+    }
+
+    .media-downloader-inline-sets-button {
+      height: 34px !important;
+      min-height: 34px !important;
+      padding: 0 13px !important;
+      border: 1px solid rgba(15, 159, 110, 0.22) !important;
+      border-radius: 999px !important;
+      background: #0f9f6e !important;
+      color: #ffffff !important;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif !important;
+      font-size: 13px !important;
+      font-weight: 800 !important;
+      line-height: 1 !important;
+      white-space: nowrap !important;
+      cursor: pointer !important;
+      box-shadow: 0 8px 20px rgba(15, 159, 110, 0.22) !important;
+    }
+
+    .media-downloader-inline-sets-button:hover {
+      background: #087c55 !important;
+      border-color: #087c55 !important;
+      color: #ffffff !important;
+    }
+    
+        /* Manual final green override for playlist buttons */
+    .media-downloader-sets-button,
+    .media-downloader-inline-sets-button {
+      background: #16a34a !important;
+      border: 1px solid #16a34a !important;
+      border-radius: 999px !important;
+      color: #ffffff !important;
+      font-family: "Segoe UI Variable", "Segoe UI", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Arial, sans-serif !important;
+      font-weight: 750 !important;
+      box-shadow: 0 8px 20px rgba(22, 163, 74, 0.34) !important;
+    }
+
+    .media-downloader-sets-button:hover,
+    .media-downloader-inline-sets-button:hover {
+      background: #15803d !important;
+      border-color: #15803d !important;
+      color: #ffffff !important;
+      box-shadow: 0 10px 24px rgba(22, 163, 74, 0.42) !important;
+    }
+
+    .media-downloader-sets-button:active,
+    .media-downloader-inline-sets-button:active {
+      background: #166534 !important;
+      border-color: #166534 !important;
+      transform: translateY(0) !important;
+    }
+
+    .media-downloader-sets-button:disabled,
+    .media-downloader-inline-sets-button:disabled {
+      background: #16a34a !important;
+      border-color: #16a34a !important;
+      color: #ffffff !important;
+      opacity: 0.72 !important;
+      cursor: default !important;
+      box-shadow: 0 6px 16px rgba(22, 163, 74, 0.22) !important;
+    }
   `;
 
   document.documentElement.appendChild(style);
@@ -1832,10 +1899,12 @@ function getInlinePlaylistActionsContainer(cardElement) {
     return null;
   }
 
-  // ВАЖНО:
-  // Ищем action bar именно внешней карточки плейлиста.
-  // Нельзя брать .trackItem__actions/.trackItem__additional,
-  // иначе кнопка "Скачать плейлист" уедет внутрь первого трека.
+  const existingSlot = cardElement.querySelector(".media-downloader-inline-sets-slot");
+
+  if (existingSlot) {
+    return existingSlot;
+  }
+
   const selectors = [
     ".sound__soundActions .sc-button-group",
     ".sound__soundActions",
@@ -1847,24 +1916,37 @@ function getInlinePlaylistActionsContainer(cardElement) {
     ".listenEngagement"
   ];
 
+  let host = null;
+
   for (const selector of selectors) {
     const elements = cardElement.querySelectorAll(selector);
 
     for (const element of elements) {
-      // Пропускаем action bar, если он находится внутри строки трека.
-      if (isInlinePlaylistTrackRowElement(element)) {
-        continue;
-      }
-
       const rect = element.getBoundingClientRect();
 
       if (rect.width > 20 && rect.height > 20) {
-        return element;
+        host = element;
+        break;
       }
     }
+
+    if (host) break;
   }
 
-  return null;
+  if (!host) {
+    host =
+      cardElement.querySelector(".soundTitle") ||
+      cardElement.querySelector(".sound__content") ||
+      cardElement.querySelector(".soundContent") ||
+      cardElement;
+  }
+
+  const slot = document.createElement("span");
+  slot.className = "media-downloader-inline-sets-slot";
+
+  host.appendChild(slot);
+
+  return slot;
 }
 
 function getInlinePlaylistButtonText(trackCount) {
@@ -2096,9 +2178,11 @@ function upsertInlinePlaylistButton(cardElement, playlistInfo) {
 
   const nextText = getInlinePlaylistButtonText(playlistInfo.trackCount);
 
-  if (button.textContent !== nextText) {
+  if (!button.disabled && button.textContent !== nextText) {
     button.textContent = nextText;
   }
+
+  warmUpInlinePlaylistInfo(playlistInfo.permalinkUrl, playlistInfo, button);
 }
 
 function isInlinePlaylistCardNearViewport(cardElement) {
@@ -2152,24 +2236,17 @@ function scanInlineSoundCloudPlaylistCards() {
       [
         ".sound",
         ".soundList__item",
-        ".searchList__item"
+        ".searchList__item",
+        ".userStreamItem",
+        "article",
+        "li"
       ].join(",")
     )
   )
     .filter(isInlinePlaylistCardNearViewport)
-    .slice(0, SETS_INLINE_MAX_CARDS_PER_SCAN);
+    .slice(0, SETS_INLINE_MAX_CARDS_PER_SCAN * 2);
 
   cards.forEach((cardElement) => {
-    const existingButton = cardElement.querySelector(`.${SETS_INLINE_BUTTON_CLASS}`);
-
-    // Даже если кнопка "Скачать плейлист" уже есть,
-    // строки внутри embedded playlist могли дорисоваться позже.
-    // Поэтому не выходим полностью, а продолжаем обработку строк.
-    if (existingButton && existingButton.getAttribute(SETS_INLINE_URL_ATTRIBUTE)) {
-      markInlinePlaylistTrackRowsForSoloDownload(cardElement);
-      return;
-    }
-
     const playlistLink = getInlinePlaylistLinkFromCard(cardElement);
 
     if (!playlistLink) {
@@ -2193,12 +2270,6 @@ function scanInlineSoundCloudPlaylistCards() {
 
     cardElement.setAttribute(SETS_INLINE_CARD_ATTRIBUTE, "true");
     cardElement.setAttribute(SETS_INLINE_URL_ATTRIBUTE, permalinkUrl);
-
-    cardElement
-      .querySelectorAll(`.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`)
-      .forEach((element) => {
-        element.remove();
-      });
 
     const domCount = getInlinePlaylistDomTrackCount(cardElement);
 

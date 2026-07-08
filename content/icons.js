@@ -1,3 +1,34 @@
+function setDownloadButtonBusy(buttonElement, titleText) {
+  if (!buttonElement) return;
+
+  buttonElement.classList.add("is-busy");
+  buttonElement.setAttribute("aria-busy", "true");
+
+  if (titleText) {
+    buttonElement.title = titleText;
+  }
+
+  // Важно: не меняем textContent, чтобы кнопка не превращалась в текст.
+  if (!buttonElement.querySelector(".md-icon-symbol")) {
+    buttonElement.innerHTML = getDownloadIconMarkup();
+  }
+}
+
+function resetDownloadButton(buttonElement, mediaItem) {
+  if (!buttonElement) return;
+
+  buttonElement.classList.remove("is-busy");
+  buttonElement.removeAttribute("aria-busy");
+
+  if (mediaItem?.filename) {
+    buttonElement.title = `Скачать ${mediaItem.filename}`;
+  }
+
+  if (!buttonElement.querySelector(".md-icon-symbol")) {
+    buttonElement.innerHTML = getDownloadIconMarkup();
+  }
+}
+
 function downloadMedia(mediaItem, buttonElement) {
   if (!mediaItem) return;
 
@@ -10,28 +41,30 @@ function downloadMedia(mediaItem, buttonElement) {
     mediaItem.streamType === "dash";
 
   if (isHls) {
-    buttonElement.textContent = "Открываю HLS...";
+    setDownloadButtonBusy(buttonElement, "Открываю HLS загрузчик");
 
     openHlsDownloaderPanel(mediaItem);
 
     setTimeout(() => {
-      buttonElement.innerHTML = getDownloadIconMarkup();
-    }, 1200);
+      resetDownloadButton(buttonElement, mediaItem);
+    }, 900);
 
     return;
   }
 
   if (isDash) {
-    buttonElement.textContent = "Открываю DASH...";
+    setDownloadButtonBusy(buttonElement, "Открываю DASH загрузчик");
 
     openDashDownloaderPanel(mediaItem);
 
     setTimeout(() => {
-      buttonElement.innerHTML = getDownloadIconMarkup();
-    }, 1200);
+      resetDownloadButton(buttonElement, mediaItem);
+    }, 900);
 
     return;
   }
+
+  setDownloadButtonBusy(buttonElement, "Скачивание начато");
 
   chrome.runtime.sendMessage(
     {
@@ -43,20 +76,18 @@ function downloadMedia(mediaItem, buttonElement) {
       if (!response || !response.ok) {
         console.warn("[Media Downloader] Download failed:", response?.error || "Unknown error");
 
-        buttonElement.textContent = "Ошибка";
+        buttonElement.title = "Ошибка скачивания";
 
         setTimeout(() => {
-          buttonElement.innerHTML = getDownloadIconMarkup();
+          resetDownloadButton(buttonElement, mediaItem);
         }, 1200);
 
         return;
       }
 
-      buttonElement.textContent = "Скачивается...";
-
       setTimeout(() => {
-        buttonElement.innerHTML = getDownloadIconMarkup();
-      }, 1200);
+        resetDownloadButton(buttonElement, mediaItem);
+      }, 900);
     }
   );
 }
@@ -120,7 +151,6 @@ function injectStyles() {
       top: 10px !important;
       right: 10px !important;
       margin-left: 0 !important;
-
       opacity: 0 !important;
       pointer-events: none !important;
     }
@@ -147,40 +177,32 @@ function injectStyles() {
       pointer-events: auto !important;
     }
 
-    .media-downloader-video-button .md-icon-symbol,
-    .media-downloader-audio-button .md-icon-symbol {
-      background: rgba(255, 255, 255, 0.85) !important;
-    }
-
     .media-downloader-icon {
       display: inline-flex !important;
       align-items: center !important;
       justify-content: center !important;
       gap: 6px !important;
-
       margin-left: 8px !important;
-      padding: 2px 4px !important;
-
-      border: none !important;
-      background: transparent !important;
-      color: #0f8f52 !important;
-
-      font-family: Arial, sans-serif !important;
-      font-size: 14px !important;
-      font-weight: 700 !important;
+      padding: 3px 5px !important;
+      border: 1px solid rgba(15, 159, 110, 0.18) !important;
+      border-radius: 12px !important;
+      background: rgba(255, 255, 255, 0.92) !important;
+      color: #087c55 !important;
+      box-shadow: 0 8px 22px rgba(8, 23, 35, 0.12) !important;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif !important;
+      font-size: 13px !important;
+      font-weight: 800 !important;
       line-height: 1 !important;
-
       cursor: pointer !important;
       vertical-align: middle !important;
       white-space: nowrap !important;
-
       transition:
-        background 0.18s ease,
-        color 0.18s ease,
-        padding 0.18s ease,
-        border-radius 0.18s ease,
-        opacity 0.18s ease !important;
-
+        transform 0.16s ease,
+        background 0.16s ease,
+        color 0.16s ease,
+        border-color 0.16s ease,
+        opacity 0.16s ease,
+        box-shadow 0.16s ease !important;
       z-index: 20 !important;
     }
 
@@ -188,18 +210,16 @@ function injectStyles() {
       display: inline-flex !important;
       align-items: center !important;
       justify-content: center !important;
-
       width: 24px !important;
       height: 24px !important;
       min-width: 24px !important;
-
-      background: rgba(31, 157, 85, 0.12) !important;
-      border-radius: 8px !important;
+      border-radius: 9px !important;
+      background: rgba(15, 159, 110, 0.12) !important;
     }
 
     .media-downloader-icon .md-icon-symbol svg {
-      width: 20px !important;
-      height: 20px !important;
+      width: 19px !important;
+      height: 19px !important;
       display: block !important;
     }
 
@@ -212,19 +232,20 @@ function injectStyles() {
     }
 
     .media-downloader-icon:hover {
-      background: #1f9d55 !important;
+      transform: translateY(-1px) !important;
+      background: #0f9f6e !important;
+      border-color: #0f9f6e !important;
       color: #ffffff !important;
-      padding: 5px 7px !important;
-      border-radius: 999px !important;
+      box-shadow: 0 10px 26px rgba(15, 159, 110, 0.24) !important;
     }
 
     .media-downloader-icon:hover .md-icon-symbol {
-      background: transparent !important;
+      background: rgba(255, 255, 255, 0.16) !important;
     }
 
     .media-downloader-icon:hover .md-icon-text {
       opacity: 1 !important;
-      max-width: 80px !important;
+      max-width: 82px !important;
     }
 
     .media-downloader-ui-disabled .media-downloader-icon {
@@ -247,53 +268,266 @@ function injectStyles() {
       position: static !important;
       top: auto !important;
       right: auto !important;
-    
-      width: 40px !important;
-      height: 40px !important;
-      min-width: 40px !important;
-    
+      width: 34px !important;
+      height: 34px !important;
+      min-width: 34px !important;
       margin: 0 0 0 8px !important;
       padding: 0 !important;
-    
-      border: none !important;
-      border-radius: 4px !important;
-      background: #16a34a !important;
+      border: 1px solid rgba(15, 159, 110, 0.20) !important;
+      border-radius: 11px !important;
+      background: #0f9f6e !important;
       color: #ffffff !important;
-    
+      box-shadow: 0 8px 20px rgba(15, 159, 110, 0.22) !important;
       display: inline-flex !important;
       align-items: center !important;
       justify-content: center !important;
-    
-      vertical-align: top !important;
+      vertical-align: middle !important;
       flex: 0 0 auto !important;
     }
-    
+
     .media-downloader-soundcloud-track-button:hover {
-      background: #15803d !important;
+      background: #087c55 !important;
+      border-color: #087c55 !important;
       color: #ffffff !important;
       padding: 0 !important;
-      border-radius: 4px !important;
+      border-radius: 11px !important;
     }
-    
+
     .media-downloader-soundcloud-track-button .md-icon-symbol {
-      width: 24px !important;
-      height: 24px !important;
-      min-width: 24px !important;
+      width: 22px !important;
+      height: 22px !important;
+      min-width: 22px !important;
       background: transparent !important;
       border-radius: 0 !important;
     }
-    
+
     .media-downloader-soundcloud-track-button .md-icon-symbol svg {
-      width: 21px !important;
-      height: 21px !important;
+      width: 20px !important;
+      height: 20px !important;
     }
-    
+
     .media-downloader-soundcloud-track-button .md-icon-text,
     .media-downloader-soundcloud-track-button:hover .md-icon-text {
       display: none !important;
       opacity: 0 !important;
       max-width: 0 !important;
     }
+
+    .media-downloader-soundcloud-playlist-row-button {
+      position: absolute !important;
+      top: 50% !important;
+      right: 8px !important;
+      transform: translateY(-50%) !important;
+      margin: 0 !important;
+      width: 30px !important;
+      height: 30px !important;
+      min-width: 30px !important;
+      border-radius: 10px !important;
+      opacity: 0.92 !important;
+    }
+
+    .media-downloader-soundcloud-playlist-row-button:hover {
+      transform: translateY(-50%) scale(1.03) !important;
+      opacity: 1 !important;
+    }
+
+    .media-downloader-soundcloud-playlist-row-button .md-icon-symbol,
+    .media-downloader-soundcloud-playlist-row-button .md-icon-symbol svg {
+      width: 18px !important;
+      height: 18px !important;
+      min-width: 18px !important;
+    }
+    
+        /* Manual final green override for all track/media download buttons */
+    .media-downloader-icon,
+    .media-downloader-media-button,
+    .media-downloader-audio-button,
+    .media-downloader-video-button,
+    .media-downloader-track-button,
+    .media-downloader-soundcloud-track-button,
+    .media-downloader-soundcloud-playlist-row-button {
+      background: #16a34a !important;
+      border-color: #16a34a !important;
+      color: #ffffff !important;
+      box-shadow: 0 8px 20px rgba(22, 163, 74, 0.34) !important;
+      font-family: "Segoe UI Variable", "Segoe UI", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Arial, sans-serif !important;
+    }
+
+    .media-downloader-icon:hover,
+    .media-downloader-media-button:hover,
+    .media-downloader-audio-button:hover,
+    .media-downloader-video-button:hover,
+    .media-downloader-track-button:hover,
+    .media-downloader-soundcloud-track-button:hover,
+    .media-downloader-soundcloud-playlist-row-button:hover {
+      background: #15803d !important;
+      border-color: #15803d !important;
+      color: #ffffff !important;
+      box-shadow: 0 10px 24px rgba(22, 163, 74, 0.42) !important;
+    }
+
+    .media-downloader-icon .md-icon-symbol,
+    .media-downloader-media-button .md-icon-symbol,
+    .media-downloader-audio-button .md-icon-symbol,
+    .media-downloader-video-button .md-icon-symbol,
+    .media-downloader-track-button .md-icon-symbol,
+    .media-downloader-soundcloud-track-button .md-icon-symbol,
+    .media-downloader-soundcloud-playlist-row-button .md-icon-symbol {
+      background: transparent !important;
+      color: #ffffff !important;
+      box-shadow: none !important;
+      border: 0 !important;
+      padding: 0 !important;
+      margin: 0 !important;
+    }
+    
+        .media-downloader-icon {
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      padding: 0 !important;
+    }
+
+    .media-downloader-icon .md-icon-symbol {
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: auto !important;
+      height: auto !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      border-radius: 0 !important;
+    }
+
+    .media-downloader-icon svg,
+    .media-downloader-icon svg *,
+    .media-downloader-media-button svg,
+    .media-downloader-media-button svg *,
+    .media-downloader-track-button svg,
+    .media-downloader-track-button svg * {
+      color: #ffffff !important;
+      stroke: currentColor !important;
+    }
+
+    .media-downloader-soundcloud-track-button,
+    .media-downloader-soundcloud-playlist-row-button {
+      border-radius: 999px !important;
+    }
+    
+        /* Final fix: remove inner square on hover/focus/active */
+    .media-downloader-icon .md-icon-symbol,
+    .media-downloader-icon:hover .md-icon-symbol,
+    .media-downloader-icon:focus .md-icon-symbol,
+    .media-downloader-icon:focus-visible .md-icon-symbol,
+    .media-downloader-icon:active .md-icon-symbol,
+    .media-downloader-media-button .md-icon-symbol,
+    .media-downloader-media-button:hover .md-icon-symbol,
+    .media-downloader-media-button:focus .md-icon-symbol,
+    .media-downloader-media-button:focus-visible .md-icon-symbol,
+    .media-downloader-media-button:active .md-icon-symbol,
+    .media-downloader-audio-button .md-icon-symbol,
+    .media-downloader-audio-button:hover .md-icon-symbol,
+    .media-downloader-audio-button:focus .md-icon-symbol,
+    .media-downloader-audio-button:focus-visible .md-icon-symbol,
+    .media-downloader-audio-button:active .md-icon-symbol,
+    .media-downloader-video-button .md-icon-symbol,
+    .media-downloader-video-button:hover .md-icon-symbol,
+    .media-downloader-video-button:focus .md-icon-symbol,
+    .media-downloader-video-button:focus-visible .md-icon-symbol,
+    .media-downloader-video-button:active .md-icon-symbol,
+    .media-downloader-track-button .md-icon-symbol,
+    .media-downloader-track-button:hover .md-icon-symbol,
+    .media-downloader-track-button:focus .md-icon-symbol,
+    .media-downloader-track-button:focus-visible .md-icon-symbol,
+    .media-downloader-track-button:active .md-icon-symbol,
+    .media-downloader-soundcloud-track-button .md-icon-symbol,
+    .media-downloader-soundcloud-track-button:hover .md-icon-symbol,
+    .media-downloader-soundcloud-track-button:focus .md-icon-symbol,
+    .media-downloader-soundcloud-track-button:focus-visible .md-icon-symbol,
+    .media-downloader-soundcloud-track-button:active .md-icon-symbol {
+      background: transparent !important;
+      background-color: transparent !important;
+      background-image: none !important;
+      box-shadow: none !important;
+      border: 0 !important;
+      outline: 0 !important;
+    }
+
+    .media-downloader-icon:hover,
+    .media-downloader-icon:focus,
+    .media-downloader-icon:focus-visible,
+    .media-downloader-icon:active {
+      background: #15803d !important;
+      background-color: #15803d !important;
+      background-image: none !important;
+      border-color: #15803d !important;
+      outline: none !important;
+    }
+
+    .media-downloader-icon:hover *,
+    .media-downloader-icon:focus *,
+    .media-downloader-icon:focus-visible *,
+    .media-downloader-icon:active * {
+      background-color: transparent !important;
+      background-image: none !important;
+      box-shadow: none !important;
+    }
+
+    .media-downloader-icon svg,
+    .media-downloader-icon:hover svg,
+    .media-downloader-icon:focus svg,
+    .media-downloader-icon:active svg {
+      background: transparent !important;
+      background-color: transparent !important;
+      background-image: none !important;
+    }
+    
+        /* Final fix: icon buttons never turn into text while opening/downloading */
+    .media-downloader-icon.is-busy,
+    .media-downloader-icon.is-busy:hover,
+    .media-downloader-media-button.is-busy,
+    .media-downloader-media-button.is-busy:hover,
+    .media-downloader-track-button.is-busy,
+    .media-downloader-track-button.is-busy:hover,
+    .media-downloader-soundcloud-track-button.is-busy,
+    .media-downloader-soundcloud-track-button.is-busy:hover {
+      width: 34px !important;
+      min-width: 34px !important;
+      height: 34px !important;
+      min-height: 34px !important;
+      padding: 0 !important;
+      overflow: hidden !important;
+      background: #16a34a !important;
+      border-color: #16a34a !important;
+      color: #ffffff !important;
+    }
+
+    .media-downloader-icon.is-busy .md-icon-text,
+    .media-downloader-icon.is-busy:hover .md-icon-text,
+    .media-downloader-media-button.is-busy .md-icon-text,
+    .media-downloader-media-button.is-busy:hover .md-icon-text,
+    .media-downloader-track-button.is-busy .md-icon-text,
+    .media-downloader-track-button.is-busy:hover .md-icon-text,
+    .media-downloader-soundcloud-track-button.is-busy .md-icon-text,
+    .media-downloader-soundcloud-track-button.is-busy:hover .md-icon-text {
+      display: none !important;
+      opacity: 0 !important;
+      max-width: 0 !important;
+    }
+
+    .media-downloader-icon.is-busy .md-icon-symbol,
+    .media-downloader-icon.is-busy:hover .md-icon-symbol,
+    .media-downloader-media-button.is-busy .md-icon-symbol,
+    .media-downloader-media-button.is-busy:hover .md-icon-symbol,
+    .media-downloader-track-button.is-busy .md-icon-symbol,
+    .media-downloader-track-button.is-busy:hover .md-icon-symbol,
+    .media-downloader-soundcloud-track-button.is-busy .md-icon-symbol,
+    .media-downloader-soundcloud-track-button.is-busy:hover .md-icon-symbol {
+      background: transparent !important;
+      box-shadow: none !important;
+      border: 0 !important;
+    }
+  
   `;
 
   document.documentElement.appendChild(style);

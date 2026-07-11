@@ -32,7 +32,7 @@ const MEDIA_DOWNLOADER_NAVIGATION_RESCAN_DELAYS_MS = [
 ];
 
 const MEDIA_DOWNLOADER_FALLBACK_ATTRIBUTE = "data-media-downloader-fallback-id";
-let mediaDownloaderUiEnabled = true;
+let mediaDownloaderUiEnabled = false;
 let mediaDownloaderLastDiagnosticReportAt = 0;
 let mediaDownloaderLastScanSummaryReportAt = 0;
 
@@ -81,3 +81,24 @@ const SUPPORTED_EXTENSIONS = [
 ];
 
 const ICON_ADDED_ATTRIBUTE = "data-media-downloader-icon-added";
+
+function isSoundCloudDiscoverPage() {
+  const host = window.location.hostname.toLowerCase();
+
+  const isSoundCloud =
+    host === "soundcloud.com" ||
+    host.endsWith(".soundcloud.com");
+
+  if (!isSoundCloud) {
+    return false;
+  }
+
+  const pathname =
+    window.location.pathname.replace(/\/+$/g, "") || "/";
+
+  return (
+    pathname === "/discover" ||
+    pathname.startsWith("/discover/")
+  );
+}
+

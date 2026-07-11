@@ -239,9 +239,45 @@ function cleanupSoundCloudGenericButtons() {
   });
 }
 
+function cleanupMediaDownloaderOnBlockedSoundCloudPage() {
+  document
+    .querySelectorAll(
+      [
+        `.${MEDIA_DOWNLOADER_ICON_CLASS}`,
+        ".media-downloader-inline-sets-button",
+        ".media-downloader-inline-sets-slot",
+        ".media-downloader-sets-button"
+      ].join(",")
+    )
+    .forEach((element) => {
+      element.remove();
+    });
+
+  document
+    .querySelectorAll("[data-media-downloader-track]")
+    .forEach((element) => {
+      element.removeAttribute("data-media-downloader-track");
+      element.removeAttribute(TRACK_CAPTURE_ATTRIBUTE);
+      element.removeAttribute(TRACK_STREAM_URL_ATTRIBUTE);
+      element.removeAttribute(TRACK_STREAM_TYPE_ATTRIBUTE);
+      element.removeAttribute(TRACK_BOUND_ATTRIBUTE);
+      element.removeAttribute(TRACK_ADAPTER_ATTRIBUTE);
+      element.removeAttribute(TRACK_PERMALINK_ATTRIBUTE);
+      element.removeAttribute("data-media-downloader-capturing");
+
+      delete element.dataset.mediaDownloaderLastCaptureAt;
+      delete element.dataset.mediaDownloaderLastHlsCheckAt;
+    });
+}
+
 function scanAndAddIcons() {
   injectStyles();
   cleanupBrokenDownloaderMarks();
+
+  if (isSoundCloudDiscoverPage()) {
+    cleanupMediaDownloaderOnBlockedSoundCloudPage();
+    return;
+  }
 
   const adapter = getCurrentSiteMediaAdapter();
   const isSoundCloud = adapter?.name === "soundcloud";

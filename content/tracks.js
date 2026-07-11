@@ -311,6 +311,10 @@ function findTrackElementByTrackId(trackIdOrKey) {
 function startStreamCaptureForTrack(trackElement, reason = "interaction") {
   if (!trackElement) return;
 
+  if (isSoundCloudDiscoverPage()) {
+    return;
+  }
+
   if (isSoundCloudPlaylistCardForSoloSkip(trackElement)) {
     removeSoloButtonFromSoundCloudPlaylistCard(trackElement);
     return;
@@ -1006,6 +1010,10 @@ async function resolveSoloSoundCloudTrackMediaItemFromApi(trackElement) {
 }
 
 function maybeResolveMissingSoloSoundCloudButton(trackElement) {
+  if (isSoundCloudDiscoverPage()) {
+    return;
+  }
+
   if (!isSoundCloudTrackButtonContext(trackElement)) return;
 
   if (isSoundCloudPlaylistCardForSoloSkip(trackElement)) {
@@ -1059,6 +1067,18 @@ function maybeResolveMissingSoloSoundCloudButton(trackElement) {
 // Восстанавливает кнопки скачивания на трек-карточках, которые потеряли их
 // из-за ре-рендера/виртуализации SoundCloud. Вызывается после каждого скана.
 function restoreTrackButtonsIfMissing() {
+   if (isSoundCloudDiscoverPage()) {
+    document
+      .querySelectorAll(
+        `.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`
+      )
+      .forEach((element) => {
+        element.remove();
+      });
+
+    return;
+  }
+
   document.querySelectorAll("[data-media-downloader-track]").forEach((trackElement) => {
     if (
       isSoundCloudTrackButtonContext(trackElement) &&

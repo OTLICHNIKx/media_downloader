@@ -2200,8 +2200,34 @@ function isInlinePlaylistCardNearViewport(cardElement) {
   );
 }
 
+function cleanupInlineSoundCloudPlaylistButtons() {
+  document
+    .querySelectorAll(
+      [
+        `.${SETS_INLINE_BUTTON_CLASS}`,
+        ".media-downloader-inline-sets-slot"
+      ].join(",")
+    )
+    .forEach((element) => {
+      element.remove();
+    });
+
+  document
+    .querySelectorAll(`[${SETS_INLINE_CARD_ATTRIBUTE}]`)
+    .forEach((element) => {
+      element.removeAttribute(SETS_INLINE_CARD_ATTRIBUTE);
+      element.removeAttribute(SETS_INLINE_URL_ATTRIBUTE);
+    });
+}
+
 function scheduleInlineSoundCloudPlaylistScan(delay = SETS_INLINE_SCAN_DEBOUNCE_MS) {
   if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return;
+  }
+
+  if (isSoundCloudDiscoverPage()) {
+    clearTimeout(setsInlineScanTimer);
+    cleanupInlineSoundCloudPlaylistButtons();
     return;
   }
 
@@ -2226,6 +2252,11 @@ function scheduleInlineSoundCloudPlaylistScan(delay = SETS_INLINE_SCAN_DEBOUNCE_
 
 function scanInlineSoundCloudPlaylistCards() {
   if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return;
+  }
+
+  if (isSoundCloudDiscoverPage()) {
+    cleanupInlineSoundCloudPlaylistButtons();
     return;
   }
 

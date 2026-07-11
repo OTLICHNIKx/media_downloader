@@ -325,6 +325,48 @@ function injectStyles() {
       border-radius: 10px !important;
       opacity: 0.92 !important;
     }
+    
+    /*
+     * Когда панель стандартных действий SoundCloud найдена,
+     * кнопка становится обычным последним элементом этой панели.
+     */
+    .media-downloader-soundcloud-playlist-row-button
+    .media-downloader-soundcloud-playlist-row-inline-button {
+      position: static !important;
+      top: auto !important;
+      right: auto !important;
+      bottom: auto !important;
+      left: auto !important;
+    
+      transform: none !important;
+    
+      margin-top: 0 !important;
+      margin-right: 0 !important;
+      margin-bottom: 0 !important;
+      margin-left: 6px !important;
+    
+      vertical-align: middle !important;
+      flex: 0 0 30px !important;
+    }
+    
+    .media-downloader-soundcloud-playlist-row-button.media-downloader-soundcloud-playlist-row-inline-button {
+      position: static !important;
+      top: auto !important;
+      right: auto !important;
+      bottom: auto !important;
+      left: auto !important;
+    
+      transform: none !important;
+    
+      margin: 0 0 0 6px !important;
+    
+      vertical-align: middle !important;
+      flex: 0 0 30px !important;
+    }
+    
+    .media-downloader-soundcloud-playlist-row-button.media-downloader-soundcloud-playlist-row-inline-button:hover {
+      transform: translateY(-1px) scale(1.03) !important;
+    }
 
     .media-downloader-soundcloud-playlist-row-button:hover {
       transform: translateY(-50%) scale(1.03) !important;

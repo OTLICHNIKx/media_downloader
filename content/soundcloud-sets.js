@@ -33,6 +33,9 @@ let setsLastNavigationAt = 0;
 let setsNavigationScanToken = 0;
 let setsButtonBusy = false;
 
+let setsStablePageKey = "";
+let setsStableTrackCount = 0;
+
 let setsInlineScanTimer = null;
 let setsInlineLastScanAt = 0;
 
@@ -220,11 +223,19 @@ function getSoundCloudComparablePath(value) {
   try {
     const parsedUrl = new URL(value, window.location.href);
 
-    if (!parsedUrl.hostname.includes("soundcloud.com")) {
+    if (!parsedUrl.hostname.toLowerCase().includes("soundcloud.com")) {
       return "";
     }
 
-    return parsedUrl.pathname
+    let pathname = parsedUrl.pathname;
+
+    try {
+      pathname = decodeURIComponent(pathname);
+    } catch {
+      // Оставляем исходный pathname.
+    }
+
+    return pathname
       .replace(/\/+$/g, "")
       .toLowerCase();
   } catch {
@@ -2225,6 +2236,16 @@ function scheduleInlineSoundCloudPlaylistScan(delay = SETS_INLINE_SCAN_DEBOUNCE_
     return;
   }
 
+  /*
+   * На полноценной странице плейлиста работает плавающая кнопка.
+   * Inline-сканер здесь запускать нельзя, иначе он может пометить
+   * весь плейлист как одну embedded-карточку.
+   */
+  if (isSoundCloudSetsPage()) {
+    clearTimeout(setsInlineScanTimer);
+    return;
+  }
+
   if (isSoundCloudDiscoverPage()) {
     clearTimeout(setsInlineScanTimer);
     cleanupInlineSoundCloudPlaylistButtons();
@@ -2252,6 +2273,13 @@ function scheduleInlineSoundCloudPlaylistScan(delay = SETS_INLINE_SCAN_DEBOUNCE_
 
 function scanInlineSoundCloudPlaylistCards() {
   if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return;
+  }
+
+  /*
+   * Не сканируем embedded playlists внутри самой страницы плейлиста.
+   */
+  if (isSoundCloudSetsPage()) {
     return;
   }
 
@@ -2464,37 +2492,91 @@ function getCurrentDomPlaylistTrackCount() {
 // Полный список через API достаётся при клике — это медленный запрос.
 function refreshSetsButton() {
   if (!isSoundCloudSetsPage()) {
+    setsStablePageKey = "";
+    setsStableTrackCount = 0;
     removeSetsButton();
     return;
   }
 
-  // Быстрый синхронный подсчёт для отображения на кнопке.
-  // priority: актуальный hydration > DOM trackItem/permalink count.
+  const currentPageKey = getCurrentSetsPageKey();
+
+  /*
+   * Перешли на другой плейлист — сбрасываем сохранённое количество.
+   */
+  if (setsStablePageKey !== currentPageKey) {
+    setsStablePageKey = currentPageKey;
+    setsStableTrackCount = 0;
+
+    const oldButton = document.getElementById(SETS_BUTTON_ID);
+
+    if (
+      oldButton &&
+      oldButton.dataset.setsPageKey !== currentPageKey
+    ) {
+      removeSetsButton();
+    }
+  }
+
   const playlistInfo = extractPlaylistFromHydration();
+
   const hydrationCount = playlistInfo
-    ? Number(playlistInfo.trackCount || playlistInfo.tracks.length || 0)
+    ? Number(
+        playlistInfo.trackCount ||
+        playlistInfo.tracks?.length ||
+        0
+      ) || 0
     : 0;
 
-  if (hydrationCount > 0) {
-    createSetsButton(hydrationCount);
+  const domCount =
+    Number(getCurrentDomPlaylistTrackCount() || 0);
+
+  /*
+   * Берём максимальное значение:
+   * hydration может знать полный размер плейлиста,
+   * а DOM может содержать только отрендеренную часть.
+   */
+  const detectedCount = Math.max(
+    hydrationCount,
+    domCount
+  );
+
+  if (detectedCount > 0) {
+    setsStableTrackCount = Math.max(
+      setsStableTrackCount,
+      detectedCount
+    );
+
+    createSetsButton(setsStableTrackCount);
     return;
   }
 
-  // Сразу после SPA-перехода DOM ещё может содержать треки прошлого плейлиста.
-  // Ненадолго убираем кнопку, чтобы не показывать старое количество.
-  if (setsLastNavigationAt && Date.now() - setsLastNavigationAt < SETS_DOM_COUNT_GRACE_AFTER_NAV_MS) {
-    removeSetsButton();
+  const existingButton =
+    document.getElementById(SETS_BUTTON_ID);
+
+  /*
+   * SoundCloud временно удалил строки во время Ember-render.
+   * Если кнопка уже относится к этой странице, оставляем её.
+   */
+  if (
+    existingButton &&
+    existingButton.dataset.setsPageKey === currentPageKey
+  ) {
     return;
   }
 
-  const domCount = getCurrentDomPlaylistTrackCount();
-
-  if (domCount > 0) {
-    createSetsButton(domCount);
-    return;
+  /*
+   * Если количество уже было найдено раньше, восстанавливаем кнопку
+   * по сохранённому значению.
+   */
+  if (setsStableTrackCount > 0) {
+    createSetsButton(setsStableTrackCount);
   }
 
-  removeSetsButton();
+  /*
+   * Намеренно не вызываем removeSetsButton().
+   * Нулевой DOM здесь чаще означает временную перерисовку,
+   * а не отсутствие треков.
+   */
 }
 
 function runSetsScanSafely() {

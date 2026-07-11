@@ -242,20 +242,61 @@ function getSoundCloudTrackPermalinkFromTrackElement(trackElement) {
 }
 
 function getSoundCloudClientIdForSoloTrack() {
+  /*
+   * Первый вариант — функция из soundcloud-sets.js.
+   * На момент клика этот файл уже должен быть загружен.
+   */
   try {
     if (typeof getClientId === "function") {
-      return getClientId() || "";
+      const clientId = getClientId();
+
+      if (clientId) {
+        return clientId;
+      }
     }
   } catch {
-    // ignore
+    // Используем следующие способы.
   }
 
+  /*
+   * Второй вариант — inline-скрипты SoundCloud.
+   */
   try {
-    const entries = performance.getEntriesByType("resource");
+    const scripts =
+      document.querySelectorAll("script:not([src])");
+
+    for (const script of scripts) {
+      const text = script.textContent || "";
+
+      const match =
+        text.match(
+          /client_id["':\s]+["']([a-zA-Z0-9]{20,40})["']/
+        ) ||
+        text.match(
+          /"client_id"\s*:\s*"([a-zA-Z0-9]{20,40})"/
+        );
+
+      if (match && match[1]) {
+        return match[1];
+      }
+    }
+  } catch {
+    // Используем performance.
+  }
+
+  /*
+   * Третий вариант — реальные запросы SoundCloud.
+   */
+  try {
+    const entries =
+      performance.getEntriesByType("resource");
 
     for (const entry of entries) {
       const name = entry.name || "";
-      const match = name.match(/client_id=([a-zA-Z0-9]{20,40})/);
+
+      const match = name.match(
+        /client_id=([a-zA-Z0-9]{20,40})/
+      );
 
       if (match && match[1]) {
         return match[1];
@@ -413,7 +454,23 @@ function isSoundCloudPlaylistPermalinkForSoloSkip(href) {
 }
 
 function isSoundCloudPlaylistInnerTrackRow(trackElement) {
-  return false;
+  if (!trackElement || !(trackElement instanceof Element)) {
+    return false;
+  }
+
+  const rowSelector = [
+    ".trackItem",
+    ".systemPlaylistTrackList__item",
+    ".listenDetails__trackList .trackItem",
+    ".playlist__tracks .trackItem",
+    ".compactTrackList__item",
+    ".compactTrackList .trackItem"
+  ].join(",");
+
+  return Boolean(
+    trackElement.matches(rowSelector) ||
+    trackElement.closest(rowSelector)
+  );
 }
 
 function isSoundCloudPlaylistCardForSoloSkip(trackElement) {
@@ -422,6 +479,14 @@ function isSoundCloudPlaylistCardForSoloSkip(trackElement) {
   }
 
   if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return false;
+  }
+
+    /*
+   * Отдельная строка трека внутри плейлиста — это трек,
+   * а не карточка самого плейлиста.
+   */
+  if (isSoundCloudPlaylistInnerTrackRow(trackElement)) {
     return false;
   }
 
@@ -479,16 +544,69 @@ function isUsableSoundCloudActionsContainer(element) {
   return rect.width > 20 && rect.height > 20;
 }
 
+function getSoundCloudPlaylistRowActionsContainer(trackElement) {
+  if (!trackElement || !(trackElement instanceof Element)) {
+    return null;
+  }
+
+  const row =
+    trackElement.matches(
+      ".trackItem, .systemPlaylistTrackList__item, .compactTrackList__item"
+    )
+      ? trackElement
+      : trackElement.closest(
+          ".trackItem, .systemPlaylistTrackList__item, .compactTrackList__item"
+        );
+
+  if (!row) {
+    return null;
+  }
+
+  /*
+   * Ищем именно контейнер стандартных кнопок SoundCloud.
+   * Не используем .trackItem__content, потому что это основная область
+   * названия и волны трека.
+   */
+  const selectors = [
+    ".trackItem__actions",
+    ".trackItem__additional",
+    ".trackItem__actions .sc-button-group",
+    ".trackItem__additional .sc-button-group",
+    ".sc-button-group"
+  ];
+
+  for (const selector of selectors) {
+    const container = row.querySelector(selector);
+
+    if (!container) {
+      continue;
+    }
+
+    const rect = container.getBoundingClientRect();
+
+    if (rect.width > 1 && rect.height > 1) {
+      return container;
+    }
+  }
+
+  return null;
+}
+
 function getSoundCloudTrackActionsContainer(trackElement) {
   if (!trackElement || !(trackElement instanceof Element)) {
     return null;
   }
 
-  // Для треков внутри embedded playlist не используем action bar строки.
-  // Иначе кнопка попадает рядом с share/copy/like/more и ломает раскладку.
-  // Возвращаем саму строку, а CSS поставит кнопку справа сбоку.
   if (isSoundCloudPlaylistInnerTrackRow(trackElement)) {
-    return trackElement;
+    /*
+     * Сначала пытаемся добавить кнопку после стандартных кнопок трека.
+     * Только если SoundCloud ещё не дорисовал action bar — используем
+     * старое абсолютное размещение внутри строки.
+     */
+    return (
+      getSoundCloudPlaylistRowActionsContainer(trackElement) ||
+      trackElement
+    );
   }
 
   const selectors = [
@@ -560,6 +678,14 @@ function addIconOnTrackElement(trackElement, mediaItem) {
     ? getSoundCloudTrackActionsContainer(trackElement)
     : trackElement;
 
+  const isSoundCloudPlaylistRow =
+    isSoundCloud &&
+    isSoundCloudPlaylistInnerTrackRow(trackElement);
+
+  const isInlineSoundCloudPlaylistButton =
+    isSoundCloudPlaylistRow &&
+    targetContainer !== trackElement;
+
   // На SoundCloud нельзя падать в absolute/generic overlay.
   // Если action bar ещё не дорисован Ember'ом — ждём следующий scan.
   // Binding уже сохранён выше, поэтому restoreTrackButtonsIfMissing()
@@ -608,12 +734,21 @@ function addIconOnTrackElement(trackElement, mediaItem) {
   icon.classList.add("media-downloader-track-button");
 
   if (isSoundCloud) {
-    icon.classList.add("media-downloader-soundcloud-track-button");
+    icon.classList.add(
+      "media-downloader-soundcloud-track-button"
+    );
 
-    if (isSoundCloudPlaylistInnerTrackRow(trackElement)) {
-      icon.classList.add("media-downloader-soundcloud-playlist-row-button");
+  if (isSoundCloudPlaylistRow) {
+    icon.classList.add(
+      "media-downloader-soundcloud-playlist-row-button"
+    );
+  if (isInlineSoundCloudPlaylistButton) {
+      icon.classList.add(
+        "media-downloader-soundcloud-playlist-row-inline-button"
+      );
     }
   }
+}
 
   icon.setAttribute(MEDIA_DOWNLOADER_URL_ATTRIBUTE, mediaItem.url);
 
@@ -735,6 +870,360 @@ function enrichMediaItemWithTrackMetadata(mediaItem, trackElement) {
   });
 
   return enriched;
+}
+
+const SOLO_SOUNDCLOUD_PAGE_BUTTON_ATTRIBUTE =
+  "data-media-downloader-solo-page-button";
+
+const SOLO_SOUNDCLOUD_PAGE_CONTEXT_ATTRIBUTE =
+  "data-media-downloader-solo-page-context";
+
+function getCurrentSoundCloudSoloTrackPageUrl() {
+  try {
+    const url = new URL(window.location.href);
+    const host = url.hostname.toLowerCase();
+
+    if (
+      host !== "soundcloud.com" &&
+      !host.endsWith(".soundcloud.com")
+    ) {
+      return "";
+    }
+
+    url.hash = "";
+    url.search = "";
+
+    const parts = url.pathname
+      .split("/")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    // Страница трека: /artist/track
+    if (parts.length !== 2) {
+      return "";
+    }
+
+    const [artistSlug, trackSlug] = parts;
+
+    const blockedFirstParts = new Set([
+      "discover",
+      "search",
+      "you",
+      "messages",
+      "notifications",
+      "settings",
+      "upload",
+      "pages",
+      "terms-of-use",
+      "privacy",
+      "stream",
+      "charts",
+      "popular",
+      "genres"
+    ]);
+
+    const blockedSecondParts = new Set([
+      "sets",
+      "likes",
+      "reposts",
+      "comments",
+      "tracks",
+      "albums",
+      "followers",
+      "following"
+    ]);
+
+    if (
+      !artistSlug ||
+      !trackSlug ||
+      blockedFirstParts.has(artistSlug.toLowerCase()) ||
+      blockedSecondParts.has(trackSlug.toLowerCase())
+    ) {
+      return "";
+    }
+
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function findCurrentSoundCloudSoloActionsContainer() {
+  const selectors = [
+    ".listenEngagement__actions",
+    ".listenEngagement .sc-button-group",
+    ".listenEngagement",
+    ".listenDetails .soundActions .sc-button-group",
+    ".listenDetails .soundActions",
+    ".listenHero .soundActions .sc-button-group",
+    ".listenHero .soundActions"
+  ];
+
+  for (const selector of selectors) {
+    const elements = document.querySelectorAll(selector);
+
+    for (const element of elements) {
+      if (!(element instanceof Element)) {
+        continue;
+      }
+
+      const rect = element.getBoundingClientRect();
+
+      if (
+        rect.width > 20 &&
+        rect.height > 20 &&
+        rect.bottom >= -200 &&
+        rect.top <= window.innerHeight + 600
+      ) {
+        return element;
+      }
+    }
+  }
+
+  return null;
+}
+
+function getCurrentSoundCloudSoloTrackContext() {
+  const permalinkUrl = getCurrentSoundCloudSoloTrackPageUrl();
+
+  if (!permalinkUrl) {
+    return null;
+  }
+
+  const actionsContainer =
+    findCurrentSoundCloudSoloActionsContainer();
+
+  if (!actionsContainer) {
+    return null;
+  }
+
+  const titleElement =
+    document.querySelector(
+      ".listenDetails h1.soundTitle__title"
+    ) ||
+    document.querySelector(
+      ".listenHero h1.soundTitle__title"
+    ) ||
+    document.querySelector(
+      "h1.soundTitle__title"
+    ) ||
+    document.querySelector(
+      "h1[itemprop='name']"
+    ) ||
+    document.querySelector("h1");
+
+  const authorElement =
+    document.querySelector(
+      ".listenDetails .soundTitle__username"
+    ) ||
+    document.querySelector(
+      ".listenDetails .soundTitle__usernameText"
+    ) ||
+    document.querySelector(
+      ".listenHero .soundTitle__username"
+    ) ||
+    document.querySelector(
+      ".soundTitle__username"
+    ) ||
+    document.querySelector(
+      ".soundTitle__usernameText"
+    ) ||
+    document.querySelector(
+      ".userBadge__username"
+    );
+
+  const titleFromMeta =
+    document
+      .querySelector("meta[property='og:title']")
+      ?.getAttribute("content") || "";
+
+  const title =
+    cleanMetadataText(
+      titleElement?.textContent ||
+      titleFromMeta ||
+      "SoundCloud track"
+    );
+
+  const author =
+    cleanMetadataText(
+      authorElement?.textContent || ""
+    );
+
+  /*
+   * Сам actionsContainer используем как trackElement.
+   * resolve-функции не требуют, чтобы это была настоящая карточка:
+   * им нужны permalink, название и автор.
+   */
+  actionsContainer.setAttribute(
+    SOLO_SOUNDCLOUD_PAGE_CONTEXT_ATTRIBUTE,
+    "true"
+  );
+
+  actionsContainer.setAttribute(
+    TRACK_PERMALINK_ATTRIBUTE,
+    permalinkUrl
+  );
+
+  actionsContainer.setAttribute(
+    TRACK_ADAPTER_ATTRIBUTE,
+    "soundcloud"
+  );
+
+  actionsContainer.setAttribute(
+    TRACK_TITLE_ATTRIBUTE,
+    title
+  );
+
+  if (author) {
+    actionsContainer.setAttribute(
+      TRACK_AUTHOR_ATTRIBUTE,
+      author
+    );
+  }
+
+  return {
+    trackElement: actionsContainer,
+    actionsContainer,
+    permalinkUrl,
+    title,
+    author
+  };
+}
+
+function ensureCurrentSoundCloudSoloTrackButton() {
+  const permalinkUrl =
+    getCurrentSoundCloudSoloTrackPageUrl();
+
+  const existingButtons = document.querySelectorAll(
+    `[${SOLO_SOUNDCLOUD_PAGE_BUTTON_ATTRIBUTE}]`
+  );
+
+  // Если ушли со страницы соло-трека — удаляем старую кнопку.
+  if (!permalinkUrl) {
+    existingButtons.forEach((button) => {
+      button.remove();
+    });
+
+    return;
+  }
+
+  const context =
+    getCurrentSoundCloudSoloTrackContext();
+
+  if (!context) {
+    return;
+  }
+
+  let existingButton = null;
+
+  existingButtons.forEach((button) => {
+    if (
+      button.getAttribute(
+        TRACK_PERMALINK_ATTRIBUTE
+      ) === permalinkUrl &&
+      context.actionsContainer.contains(button)
+    ) {
+      existingButton = button;
+      return;
+    }
+
+    button.remove();
+  });
+
+  if (existingButton) {
+    return;
+  }
+
+  const button = document.createElement("button");
+
+  button.type = "button";
+
+  button.className = [
+    MEDIA_DOWNLOADER_ICON_CLASS,
+    "media-downloader-track-button",
+    "media-downloader-soundcloud-track-button"
+  ].join(" ");
+
+  button.setAttribute(
+    SOLO_SOUNDCLOUD_PAGE_BUTTON_ATTRIBUTE,
+    "true"
+  );
+
+  button.setAttribute(
+    TRACK_PERMALINK_ATTRIBUTE,
+    permalinkUrl
+  );
+
+  button.title = context.title
+    ? `Скачать ${context.title}`
+    : "Скачать трек";
+
+  button.innerHTML = getDownloadIconMarkup();
+
+  button.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (button.dataset.mediaDownloaderResolving === "true") {
+      return;
+    }
+
+    button.dataset.mediaDownloaderResolving = "true";
+
+    setDownloadButtonBusy(
+      button,
+      "Получаю ссылку на трек"
+    );
+
+    try {
+      const mediaItem =
+        await resolveSoloSoundCloudTrackMediaItemFromApi(
+          context.trackElement
+        );
+
+      if (!mediaItem || !mediaItem.url) {
+        throw new Error(
+          "SoundCloud не вернул ссылку на трек"
+        );
+      }
+
+      button.setAttribute(
+        MEDIA_DOWNLOADER_URL_ATTRIBUTE,
+        mediaItem.url
+      );
+
+      button.setAttribute(
+        TRACK_STREAM_TYPE_ATTRIBUTE,
+        mediaItem.streamType ||
+        mediaItem.extension ||
+        "hls"
+      );
+
+      /*
+       * Здесь вызывается существующая логика:
+       * HLS откроет HLS-панель, прямой файл начнёт скачиваться.
+       */
+      downloadMedia(mediaItem, button);
+    } catch (error) {
+      console.warn(
+        "[Media Downloader] Solo page download failed:",
+        error?.message || error
+      );
+
+      button.title =
+        `Ошибка: ${error?.message || "трек не найден"}`;
+
+      setTimeout(() => {
+        resetDownloadButton(button, {
+          filename: context.title || "SoundCloud track"
+        });
+      }, 1600);
+    } finally {
+      delete button.dataset.mediaDownloaderResolving;
+    }
+  });
+
+  context.actionsContainer.appendChild(button);
 }
 
 const soloSoundCloudResolvedTrackCache = new Map();
@@ -1067,7 +1556,10 @@ function maybeResolveMissingSoloSoundCloudButton(trackElement) {
 // Восстанавливает кнопки скачивания на трек-карточках, которые потеряли их
 // из-за ре-рендера/виртуализации SoundCloud. Вызывается после каждого скана.
 function restoreTrackButtonsIfMissing() {
-   if (isSoundCloudDiscoverPage()) {
+
+  ensureCurrentSoundCloudSoloTrackButton();
+
+  if (isSoundCloudDiscoverPage()) {
     document
       .querySelectorAll(
         `.${MEDIA_DOWNLOADER_ICON_CLASS}.media-downloader-track-button`

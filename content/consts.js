@@ -93,12 +93,24 @@ function isSoundCloudDiscoverPage() {
     return false;
   }
 
-  const pathname =
-    window.location.pathname.replace(/\/+$/g, "") || "/";
+  let pathname = window.location.pathname;
 
-  return (
-    pathname === "/discover" ||
-    pathname.startsWith("/discover/")
-  );
+  try {
+    pathname = decodeURIComponent(pathname);
+  } catch {
+    // Оставляем исходный pathname.
+  }
+
+  pathname = pathname.replace(/\/+$/g, "") || "/";
+
+  /*
+   * Блокируем кнопки только на главной странице рекомендаций:
+   * https://soundcloud.com/discover
+   *
+   * Страницы вида:
+   * /discover/sets/your-moods:...
+   * являются полноценными плейлистами и должны обрабатываться.
+   */
+  return pathname === "/discover";
 }
 

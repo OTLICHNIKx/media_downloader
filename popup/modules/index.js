@@ -79,21 +79,32 @@ async function initPopup() {
   siteHostElement.textContent = host;
 
   getDisabledSites((disabledSites) => {
-    const isDisabled = Boolean(disabledSites[host]);
+  /*
+   * Отсутствие настройки означает:
+   * кнопки на сайте скрыты по умолчанию.
+   */
+  const isDisabled = disabledSites[host] !== false;
 
-    siteToggleElement.checked = isDisabled;
-    setStatus(isDisabled ? "Кнопки скрыты на этом сайте." : "Кнопки включены на этом сайте.");
+  siteToggleElement.checked = isDisabled;
+
+    setStatus(
+      isDisabled
+        ? "Кнопки скрыты на этом сайте."
+        : "Кнопки включены на этом сайте."
+    );
   });
 
   siteToggleElement.addEventListener("change", () => {
     const shouldDisable = siteToggleElement.checked;
 
     getDisabledSites((disabledSites) => {
-      if (shouldDisable) {
-        disabledSites[host] = true;
-      } else {
-        delete disabledSites[host];
-      }
+      /*
+       * Не удаляем настройку при включении кнопок.
+       *
+       * true  — скрыты;
+       * false — явно включены пользователем.
+       */
+      disabledSites[host] = shouldDisable;
 
       setDisabledSites(disabledSites, () => {
         sendStateToCurrentTab(tab.id, !shouldDisable);

@@ -3,14 +3,22 @@ function getCurrentSiteHost() {
 }
 
 function applyMediaDownloaderUiState(enabled) {
+  mediaDownloaderUiEnabled = Boolean(enabled);
+
   document.documentElement.classList.toggle(
     "media-downloader-ui-disabled",
-    !enabled
+    !mediaDownloaderUiEnabled
   );
 }
 
 function loadMediaDownloaderUiState() {
   const host = getCurrentSiteHost();
+
+  /*
+   * Скрываем кнопки сразу, ещё до чтения chrome.storage.
+   * Это предотвращает краткое появление кнопок при загрузке страницы.
+   */
+  applyMediaDownloaderUiState(false);
 
   chrome.storage.local.get(
     {
@@ -18,7 +26,15 @@ function loadMediaDownloaderUiState() {
     },
     (result) => {
       const disabledSites = result.disabledSites || {};
-      const isDisabled = Boolean(disabledSites[host]);
+
+      /*
+       * Новая логика:
+       *
+       * undefined — сайт ещё не настроен, кнопки скрыты;
+       * true      — кнопки скрыты;
+       * false     — пользователь явно разрешил кнопки.
+       */
+      const isDisabled = disabledSites[host] !== false;
 
       applyMediaDownloaderUiState(!isDisabled);
     }

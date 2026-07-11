@@ -10,7 +10,8 @@ function sanitizeSetsFilename(filename) {
     .replace(/\s+/g, " ")
     .trim();
 }
-
+const SETS_SCAN_OVERLAY_ID =
+  "media-downloader-sets-scan-overlay";
 const SETS_INLINE_BUTTON_CLASS = "media-downloader-inline-sets-button";
 const SETS_INLINE_CARD_ATTRIBUTE = "data-media-downloader-soundcloud-playlist-card";
 const SETS_INLINE_URL_ATTRIBUTE = "data-media-downloader-sets-url";
@@ -209,6 +210,105 @@ function injectSetsStyles() {
   `;
 
   document.documentElement.appendChild(style);
+}
+
+function showSetsScanOverlay() {
+  const existingOverlay =
+    document.getElementById(
+      SETS_SCAN_OVERLAY_ID
+    );
+
+  if (existingOverlay) {
+    return existingOverlay;
+  }
+
+  const overlay = document.createElement("div");
+
+  overlay.id = SETS_SCAN_OVERLAY_ID;
+
+  Object.assign(overlay.style, {
+    position: "fixed",
+    inset: "0",
+    zIndex: "2147483647",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "rgba(18, 18, 18, 0.94)",
+    color: "#ffffff",
+    fontFamily:
+      '"Segoe UI", Arial, sans-serif',
+    fontSize: "16px",
+    fontWeight: "700",
+    textAlign: "center",
+    cursor: "wait"
+  });
+
+  overlay.textContent =
+    "Собираю все треки плейлиста…";
+
+  document.documentElement.appendChild(
+    overlay
+  );
+
+  return overlay;
+}
+
+function waitForTwoAnimationFrames() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(resolve);
+    });
+  });
+}
+
+function isSoundCloudDiscoverDynamicSetPage() {
+  const host = window.location.hostname.toLowerCase();
+
+  if (
+    host !== "soundcloud.com" &&
+    !host.endsWith(".soundcloud.com")
+  ) {
+    return false;
+  }
+
+  let pathname = window.location.pathname;
+
+  try {
+    pathname = decodeURIComponent(pathname);
+  } catch {
+    // Оставляем исходный pathname.
+  }
+
+  pathname = pathname
+    .replace(/\/+$/g, "")
+    .toLowerCase();
+
+  return pathname.startsWith("/discover/sets/");
+}
+
+function isSoundCloudDiscoverSetsPage() {
+  const host = window.location.hostname.toLowerCase();
+
+  if (
+    host !== "soundcloud.com" &&
+    !host.endsWith(".soundcloud.com")
+  ) {
+    return false;
+  }
+
+  let pathname = window.location.pathname;
+
+  try {
+    pathname = decodeURIComponent(pathname);
+  } catch {
+    // Используем исходный pathname.
+  }
+
+  pathname = pathname
+    .replace(/\/+$/g, "")
+    .toLowerCase();
+
+  return pathname.startsWith("/discover/sets/");
 }
 
 // True только на страницах плейлистов SoundCloud (/sets/...).
@@ -1046,54 +1146,157 @@ function collectDomPlaylistTrackPermalinks() {
   return Array.from(byUrl.values());
 }
 
-async function collectAllDomPlaylistTracks(expectedTrackCount) {
+async function collectAllDomPlaylistTracks(
+  expectedTrackCount = 0,
+  options = {}
+) {
+  const shouldHideMovement =
+    options.hideMovement !== false;
+
+  const shouldLimitToExpected =
+    options.limitToExpected !== false;
+
   const startY = window.scrollY;
+
+  const scrollElement =
+    document.scrollingElement ||
+    document.documentElement;
+
+  const previousScrollBehavior =
+    document.documentElement.style.scrollBehavior;
+
   const collected = new Map();
-  let previousCount = 0;
+
+  let previousCount = -1;
+  let previousHeight = -1;
   let stableRounds = 0;
 
-  for (let round = 0; round < 35; round++) {
-    for (const track of collectDomPlaylistTrackPermalinks()) {
-      if (!track.permalinkUrl) continue;
-      collected.set(track.permalinkUrl, track);
-    }
+  const overlay = shouldHideMovement
+    ? showSetsScanOverlay()
+    : null;
 
-    const currentCount = collected.size;
+  document.documentElement.style.scrollBehavior =
+    "auto";
 
-    if (expectedTrackCount && currentCount >= expectedTrackCount) {
-      break;
-    }
+  try {
+    for (
+      let round = 0;
+      round < 50;
+      round += 1
+    ) {
+      const currentTracks =
+        collectDomPlaylistTrackPermalinks();
 
-    if (currentCount === previousCount) {
-      stableRounds += 1;
-    } else {
-      stableRounds = 0;
+      currentTracks.forEach((track) => {
+        if (!track.permalinkUrl) {
+          return;
+        }
+
+        collected.set(
+          track.permalinkUrl,
+          track
+        );
+      });
+
+      const currentCount = collected.size;
+      const currentHeight =
+        scrollElement.scrollHeight;
+
+      const atBottom =
+        window.scrollY +
+          window.innerHeight >=
+        currentHeight - 120;
+
+      /*
+       * Для обычного плейлиста trackCount
+       * обычно достоверный.
+       *
+       * Для Discover мы передадим expectedTrackCount = 0,
+       * поэтому первые 10 треков не остановят сканирование.
+       */
+      if (
+        expectedTrackCount > 0 &&
+        currentCount >= expectedTrackCount
+      ) {
+        break;
+      }
+
+      if (
+        currentCount === previousCount &&
+        currentHeight === previousHeight &&
+        atBottom
+      ) {
+        stableRounds += 1;
+      } else {
+        stableRounds = 0;
+      }
+
+      if (
+        stableRounds >= 4 &&
+        currentCount > 0
+      ) {
+        break;
+      }
+
       previousCount = currentCount;
-    }
+      previousHeight = currentHeight;
 
-    if (stableRounds >= 5 && currentCount > 0) {
-      break;
-    }
+      /*
+       * Сразу прыгаем вниз.
+       * Если SoundCloud добавит ещё 10 строк,
+       * scrollHeight увеличится на следующем проходе.
+       */
+      window.scrollTo({
+        top: currentHeight,
+        behavior: "auto"
+      });
 
-    window.scrollBy(0, Math.max(window.innerHeight * 0.9, 700));
-    await sleep(650);
+      await sleep(700);
+    }
+  } finally {
+    window.scrollTo({
+      top: startY,
+      behavior: "auto"
+    });
+
+    await waitForTwoAnimationFrames();
+
+    document.documentElement.style.scrollBehavior =
+      previousScrollBehavior;
+
+    if (overlay) {
+      overlay.remove();
+    }
   }
 
-  // Возвращаем пользователя ближе к началу, чтобы страница не оставалась внизу.
-  window.scrollTo({ top: startY, behavior: "instant" });
+  let tracks = Array.from(
+    collected.values()
+  );
 
-  let tracks = Array.from(collected.values());
-
-    if (expectedTrackCount && tracks.length > expectedTrackCount) {
-      console.warn(
-        `[Media Downloader] Sets: DOM-scroll собрал лишние ссылки ${tracks.length}/${expectedTrackCount}, обрезаю до ${expectedTrackCount}`
-      );
-
-    tracks = tracks.slice(0, expectedTrackCount);
+  /*
+   * Discover не обрезаем по предварительному
+   * количеству — оно часто равно первым 10 трекам.
+   */
+  if (
+    shouldLimitToExpected &&
+    expectedTrackCount > 0 &&
+    tracks.length > expectedTrackCount
+  ) {
+    tracks = tracks.slice(
+      0,
+      expectedTrackCount
+    );
   }
 
   console.log(
-    `[Media Downloader] Sets: DOM-scroll собрал ${tracks.length}/${expectedTrackCount || "?"} permalink(ов)`
+    "[Media Downloader] Sets: DOM scan complete",
+    {
+      collected: tracks.length,
+      expectedTrackCount:
+        expectedTrackCount || null,
+      discover:
+        isSoundCloudDiscoverSetsPage()
+    }
   );
 
   return tracks;
@@ -1496,119 +1699,140 @@ function findTrackContainer(linkElement) {
 //   3. DOM-ссылки /tracks/NNN (фолбэк)
 // Возвращает массив { trackId, title, author }.
 async function collectVisiblePlaylistTracks() {
-  // 1. Hydration data — извлекаем playlistId и tracks.
-  // На SPA-переходах hydration может быть пустым/старым, поэтому ниже есть DOM permalink fallback.
-  const playlistInfo = extractPlaylistFromHydration();
+  const playlistInfo =
+    extractPlaylistFromHydration();
 
-  const expectedTrackCount = Number(
-    playlistInfo?.trackCount ||
-      getCurrentDomPlaylistTrackCount() ||
-      0
-  ) || 0;
-
-  // 2. Пробуем получить полный список через API, если есть актуальный playlistId.
-  if (playlistInfo && playlistInfo.playlistId) {
-    const apiTracks = await fetchFullPlaylistTracks(playlistInfo);
-
-    if (apiTracks && apiTracks.length > 0) {
-      const playableApiTracks = apiTracks.filter(isPlayableResolvedTrack);
-
-      if (playableApiTracks.length !== apiTracks.length) {
-        console.warn(
-          `[Media Downloader] Sets: отфильтровано непригодных треков ${apiTracks.length - playableApiTracks.length}/${apiTracks.length}`
-        );
-      }
-
-      console.log(
-        `[Media Downloader] Sets: API дал ${playableApiTracks.length} трек(ов)`
+  /*
+   * Discover sets нельзя resolve'ить целиком:
+   * API возвращает 404.
+   *
+   * Поэтому собираем permalink отдельных треков
+   * и resolve'им каждый трек отдельно.
+   */
+  if (isSoundCloudDiscoverSetsPage()) {
+    const domTracks =
+      await collectAllDomPlaylistTracks(
+        0,
+        {
+          hideMovement: true,
+          limitToExpected: false
+        }
       );
 
-      return playableApiTracks;
+    if (domTracks.length === 0) {
+      return [];
     }
-  }
 
-  // 3. Hydration tracks, если они есть.
-  if (playlistInfo && playlistInfo.tracks.length > 0) {
-    console.log(
-      `[Media Downloader] Sets: hydration дал ${playlistInfo.tracks.length} трек(ов)`
-    );
-
-    return playlistInfo.tracks;
-  }
-
-  // 4. Новый основной fallback для SPA:
-  // собираем реальные permalink-ссылки треков вида /artist/track-slug,
-  // потом resolve'им их через api-v2.soundcloud.com/resolve.
-  const clientId = getClientId();
-  const domTracks = await collectAllDomPlaylistTracks(expectedTrackCount);
-
-  if (domTracks.length > 0) {
-    console.log(
-      `[Media Downloader] Sets: DOM permalink fallback дал ${domTracks.length}/${expectedTrackCount || "?"} ссылок`
-    );
+    const clientId = getClientId();
 
     if (!clientId) {
-      console.warn(
-        "[Media Downloader] Sets: client_id не найден, DOM permalink resolve невозможен"
+      throw new Error(
+        "SoundCloud client_id не найден"
       );
-
-      return domTracks;
     }
 
-    const resolvedDomTracks = await resolveDomPlaylistTracks(
+    const resolvedTracks =
+      await resolveDomPlaylistTracks(
+        domTracks,
+        clientId,
+        0
+      );
+
+    if (resolvedTracks.length === 0) {
+      throw new Error(
+        "Не удалось получить данные треков Discover"
+      );
+    }
+
+    return enrichPlaylistTracks(
+      resolvedTracks,
+      clientId
+    );
+  }
+
+  /*
+   * Обычные публичные плейлисты:
+   * используем старый и надёжный playlist API.
+   */
+  if (
+    playlistInfo &&
+    playlistInfo.playlistId
+  ) {
+    const apiTracks =
+      await fetchFullPlaylistTracks(
+        playlistInfo
+      );
+
+    if (
+      Array.isArray(apiTracks) &&
+      apiTracks.length > 0
+    ) {
+      return apiTracks.filter(
+        isPlayableResolvedTrack
+      );
+    }
+  }
+
+  /*
+   * Hydration fallback.
+   */
+  if (
+    playlistInfo &&
+    Array.isArray(playlistInfo.tracks) &&
+    playlistInfo.tracks.length > 0
+  ) {
+    return playlistInfo.tracks.filter(
+      isPlayableResolvedTrack
+    );
+  }
+
+  /*
+   * Последний fallback для обычного плейлиста.
+   * Не используем DOM-число как expectedTrackCount:
+   * оно может включить лишний или частичный трек.
+   */
+  const expectedTrackCount =
+    Number(
+      playlistInfo?.trackCount || 0
+    ) || 0;
+
+  const domTracks =
+    await collectAllDomPlaylistTracks(
+      expectedTrackCount,
+      {
+        hideMovement: true,
+        limitToExpected:
+          expectedTrackCount > 0
+      }
+    );
+
+  if (domTracks.length === 0) {
+    return [];
+  }
+
+  const clientId = getClientId();
+
+  if (!clientId) {
+    throw new Error(
+      "SoundCloud client_id не найден"
+    );
+  }
+
+  const resolvedTracks =
+    await resolveDomPlaylistTracks(
       domTracks,
       clientId,
       expectedTrackCount
     );
 
-    console.log(
-      `[Media Downloader] Sets: DOM permalink resolve дал ${resolvedDomTracks.length}/${expectedTrackCount || "?"} трек(ов)`
-    );
-
-    if (resolvedDomTracks.length > 0) {
-      return enrichPlaylistTracks(resolvedDomTracks, clientId);
-    }
+  if (resolvedTracks.length === 0) {
+    return [];
   }
 
-  // 5. Старый fallback оставляем только как последний шанс:
-  // он работает только для ссылок /tracks/123.
-  const trackLinks = document.querySelectorAll("a[href*='/tracks/']");
-  const seen = new Set();
-  const tracks = [];
-
-  trackLinks.forEach((link) => {
-    const href = link.getAttribute("href") || "";
-    const trackId = getTrackIdFromHref(href);
-
-    if (!trackId || seen.has(trackId)) return;
-
-    const rect = link.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-
-    const container = findTrackContainer(link);
-    const title = extractTrackTitle(container || link, link);
-    const author = extractTrackAuthor(container || link);
-
-    if (!title) return;
-
-    seen.add(trackId);
-
-    tracks.push({
-      trackId,
-      trackUrn: `soundcloud:tracks:${trackId}`,
-      title,
-      author: author || "",
-      permalinkUrl: "",
-      hlsUrl: "",
-      trackAuthorization: ""
-    });
-  });
-
-  console.log(
-    `[Media Downloader] Sets: legacy DOM /tracks fallback дал ${tracks.length} трек(ов)`
+  return enrichPlaylistTracks(
+    resolvedTracks,
+    clientId
   );
-
-  return tracks;
 }
 
 // Извлекает название плейлиста из шапки SoundCloud sets-страницы.
@@ -2245,13 +2469,7 @@ function scheduleInlineSoundCloudPlaylistScan(delay = SETS_INLINE_SCAN_DEBOUNCE_
     clearTimeout(setsInlineScanTimer);
     return;
   }
-
-  if (isSoundCloudDiscoverPage()) {
-    clearTimeout(setsInlineScanTimer);
-    cleanupInlineSoundCloudPlaylistButtons();
-    return;
-  }
-
+  
   const sinceLastScan = Date.now() - setsInlineLastScanAt;
   const effectiveDelay = sinceLastScan > 2500
     ? Math.min(delay, 250)
@@ -2280,11 +2498,6 @@ function scanInlineSoundCloudPlaylistCards() {
    * Не сканируем embedded playlists внутри самой страницы плейлиста.
    */
   if (isSoundCloudSetsPage()) {
-    return;
-  }
-
-  if (isSoundCloudDiscoverPage()) {
-    cleanupInlineSoundCloudPlaylistButtons();
     return;
   }
 
@@ -2346,6 +2559,20 @@ function scanInlineSoundCloudPlaylistCards() {
   });
 }
 
+function getSetsButtonText(trackCount) {
+  /*
+   * Discover-подборки подгружаются частями.
+   * Поэтому до полного сканирования не показываем частичное число 10.
+   */
+  if (isSoundCloudDiscoverDynamicSetPage()) {
+    return "Скачать весь плейлист";
+  }
+
+  return trackCount > 0
+    ? `Скачать плейлист (${trackCount})`
+    : "Скачать плейлист";
+}
+
 function createSetsButton(trackCount) {
   const pageKey = getCurrentSetsPageKey();
   const button = document.getElementById(SETS_BUTTON_ID);
@@ -2360,7 +2587,7 @@ function createSetsButton(trackCount) {
 
     if (!setsButtonBusy) {
       button.disabled = false;
-      button.textContent = `Скачать плейлист (${trackCount})`;
+      button.textContent = getSetsButtonText(trackCount);
     }
 
     return button;
@@ -2371,16 +2598,64 @@ function createSetsButton(trackCount) {
   newButton.className = SETS_BUTTON_CLASS;
   newButton.type = "button";
   newButton.dataset.setsPageKey = pageKey;
-  newButton.textContent = `Скачать плейлист (${trackCount})`;
+  newButton.textContent = getSetsButtonText(trackCount);
   newButton.title = "Скачать все треки плейлиста в MP3 и упаковать в ZIP";
 
   newButton.addEventListener("click", async () => {
     setsButtonBusy = true;
     newButton.disabled = true;
-    newButton.textContent = "Собираю треки...";
+    newButton.textContent =
+      isSoundCloudDiscoverDynamicSetPage()
+        ? "Сканирую весь плейлист..."
+        : "Собираю треки...";
 
     try {
-      const tracks = await collectVisiblePlaylistTracks();
+      const tracks =
+        await collectVisiblePlaylistTracks({
+          onProgress(progress) {
+            if (
+              !isSoundCloudDiscoverDynamicSetPage()
+            ) {
+              return;
+            }
+
+            const foundCount =
+              Number(progress?.foundCount || 0);
+
+            const totalCount =
+              Number(progress?.totalCount || 0);
+
+            if (progress?.stage === "resolve") {
+              newButton.textContent =
+                "Получаю данные плейлиста...";
+              return;
+            }
+
+            if (progress?.stage === "playlist") {
+              newButton.textContent =
+                totalCount > 0
+                  ? `Загружаю ${totalCount} треков...`
+                  : "Загружаю список треков...";
+
+              return;
+            }
+
+            if (progress?.stage === "complete") {
+              newButton.textContent =
+                `Открываю загрузчик (${foundCount})...`;
+            }
+
+            if (
+                progress?.stage ===
+                "background-scan"
+              ) {
+                newButton.textContent =
+                  "Собираю подборку в фоне...";
+
+                return;
+              }
+          }
+        });
       const playlistTitle = extractPlaylistTitle();
       const playlistAuthor = extractPlaylistAuthor();
       const clientId = getClientId();
@@ -2491,6 +2766,14 @@ function getCurrentDomPlaylistTrackCount() {
 // Для счётчика используем только синхронные источники (hydration/DOM).
 // Полный список через API достаётся при клике — это медленный запрос.
 function refreshSetsButton() {
+
+  if (
+    isSoundCloudDiscoverScanWorkerPage()
+  ) {
+    removeSetsButton();
+    return;
+  }
+
   if (!isSoundCloudSetsPage()) {
     setsStablePageKey = "";
     setsStableTrackCount = 0;

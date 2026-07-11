@@ -19,6 +19,9 @@ const SETS_INLINE_URL_ATTRIBUTE = "data-media-downloader-sets-url";
 const embeddedPlaylistInfoCache = new Map();
 const embeddedPlaylistResolveInFlight = new Set();
 
+let setsStablePageKey = "";
+let setsStableTrackCount = 0;
+
 const SETS_BUTTON_ID = "media-downloader-sets-button";
 const SETS_BUTTON_CLASS = "media-downloader-sets-button";
 const SETS_STYLES_ID = "media-downloader-sets-styles";
@@ -33,9 +36,6 @@ let setsLastScanRunAt = 0;
 let setsLastNavigationAt = 0;
 let setsNavigationScanToken = 0;
 let setsButtonBusy = false;
-
-let setsStablePageKey = "";
-let setsStableTrackCount = 0;
 
 let setsInlineScanTimer = null;
 let setsInlineLastScanAt = 0;
@@ -261,31 +261,6 @@ function waitForTwoAnimationFrames() {
   });
 }
 
-function isSoundCloudDiscoverDynamicSetPage() {
-  const host = window.location.hostname.toLowerCase();
-
-  if (
-    host !== "soundcloud.com" &&
-    !host.endsWith(".soundcloud.com")
-  ) {
-    return false;
-  }
-
-  let pathname = window.location.pathname;
-
-  try {
-    pathname = decodeURIComponent(pathname);
-  } catch {
-    // Оставляем исходный pathname.
-  }
-
-  pathname = pathname
-    .replace(/\/+$/g, "")
-    .toLowerCase();
-
-  return pathname.startsWith("/discover/sets/");
-}
-
 function isSoundCloudDiscoverSetsPage() {
   const host = window.location.hostname.toLowerCase();
 
@@ -317,6 +292,44 @@ function isSoundCloudSetsPage() {
     window.location.hostname.includes("soundcloud.com") &&
     window.location.pathname.includes("/sets/")
   );
+}
+
+function isBlockedSoundCloudDiscoverPage() {
+  /*
+   * Основная функция объявлена в content/consts.js,
+   * который подключается раньше soundcloud-sets.js.
+   */
+  if (
+    typeof isSoundCloudDiscoverPage === "function"
+  ) {
+    return isSoundCloudDiscoverPage();
+  }
+
+  /*
+   * Запасная проверка на случай изменения порядка файлов.
+   */
+  const host =
+    window.location.hostname.toLowerCase();
+
+  if (
+    host !== "soundcloud.com" &&
+    !host.endsWith(".soundcloud.com")
+  ) {
+    return false;
+  }
+
+  let pathname = window.location.pathname;
+
+  try {
+    pathname = decodeURIComponent(pathname);
+  } catch {
+    // Оставляем исходный pathname.
+  }
+
+  pathname =
+    pathname.replace(/\/+$/g, "") || "/";
+
+  return pathname === "/discover";
 }
 
 function getSoundCloudComparablePath(value) {
@@ -2455,8 +2468,25 @@ function cleanupInlineSoundCloudPlaylistButtons() {
     });
 }
 
+function cleanupSoundCloudPlaylistUiOnBlockedPage() {
+  clearTimeout(setsScanTimer);
+  clearTimeout(setsInlineScanTimer);
+
+  removeSetsButton();
+  cleanupInlineSoundCloudPlaylistButtons();
+
+  setsStablePageKey = "";
+  setsStableTrackCount = 0;
+}
+
 function scheduleInlineSoundCloudPlaylistScan(delay = SETS_INLINE_SCAN_DEBOUNCE_MS) {
   if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return;
+  }
+
+  if (isBlockedSoundCloudDiscoverPage()) {
+    clearTimeout(setsInlineScanTimer);
+    cleanupInlineSoundCloudPlaylistButtons();
     return;
   }
 
@@ -2469,7 +2499,7 @@ function scheduleInlineSoundCloudPlaylistScan(delay = SETS_INLINE_SCAN_DEBOUNCE_
     clearTimeout(setsInlineScanTimer);
     return;
   }
-  
+
   const sinceLastScan = Date.now() - setsInlineLastScanAt;
   const effectiveDelay = sinceLastScan > 2500
     ? Math.min(delay, 250)
@@ -2491,6 +2521,11 @@ function scheduleInlineSoundCloudPlaylistScan(delay = SETS_INLINE_SCAN_DEBOUNCE_
 
 function scanInlineSoundCloudPlaylistCards() {
   if (!window.location.hostname.toLowerCase().includes("soundcloud.com")) {
+    return;
+  }
+
+  if (isBlockedSoundCloudDiscoverPage()) {
+    cleanupInlineSoundCloudPlaylistButtons();
     return;
   }
 
@@ -2559,187 +2594,335 @@ function scanInlineSoundCloudPlaylistCards() {
   });
 }
 
-function getSetsButtonText(trackCount) {
-  /*
-   * Discover-подборки подгружаются частями.
-   * Поэтому до полного сканирования не показываем частичное число 10.
-   */
-  if (isSoundCloudDiscoverDynamicSetPage()) {
-    return "Скачать весь плейлист";
+function normalizeSetsTrackCount(value) {
+  const count = Number(value || 0);
+
+  if (
+    !Number.isFinite(count) ||
+    count <= 0
+  ) {
+    return 0;
   }
 
-  return trackCount > 0
-    ? `Скачать плейлист (${trackCount})`
-    : "Скачать плейлист";
+  return Math.floor(count);
 }
 
-function createSetsButton(trackCount) {
-  const pageKey = getCurrentSetsPageKey();
-  const button = document.getElementById(SETS_BUTTON_ID);
+function getSetsButtonText(trackCount = 0) {
+  const count =
+    normalizeSetsTrackCount(trackCount);
 
-  if (button) {
-    if (button.dataset.setsPageKey !== pageKey) {
-      setsButtonBusy = false;
-      button.disabled = false;
-    }
+  const label =
+    isSoundCloudDiscoverSetsPage()
+      ? "Скачать весь плейлист"
+      : "Скачать плейлист";
 
-    button.dataset.setsPageKey = pageKey;
+  return count > 0
+    ? `${label} (${count})`
+    : label;
+}
 
-    if (!setsButtonBusy) {
-      button.disabled = false;
-      button.textContent = getSetsButtonText(trackCount);
-    }
-
-    return button;
+function restoreSetsButtonIdleText(
+  button,
+  fallbackTrackCount = 0
+) {
+  if (!button) {
+    return;
   }
 
-  const newButton = document.createElement("button");
+  const storedCount =
+    normalizeSetsTrackCount(
+      button.dataset.trackCount
+    );
+
+  const count =
+    storedCount ||
+    normalizeSetsTrackCount(
+      fallbackTrackCount
+    );
+
+  button.textContent =
+    getSetsButtonText(count);
+}
+
+function createSetsButton(
+  trackCount = 0
+) {
+  const pageKey =
+    getCurrentSetsPageKey();
+
+  const normalizedCount =
+    normalizeSetsTrackCount(
+      trackCount
+    );
+
+  const existingButton =
+    document.getElementById(
+      SETS_BUTTON_ID
+    );
+
+  if (existingButton) {
+    const pageChanged =
+      existingButton.dataset.setsPageKey !==
+      pageKey;
+
+    if (pageChanged) {
+      setsButtonBusy = false;
+      existingButton.disabled = false;
+
+      existingButton.dataset.trackCount =
+        String(normalizedCount);
+    } else if (normalizedCount > 0) {
+      /*
+       * Обновляем число, когда SoundCloud
+       * дорисовал дополнительные треки.
+       */
+      existingButton.dataset.trackCount =
+        String(normalizedCount);
+    }
+
+    existingButton.dataset.setsPageKey =
+      pageKey;
+
+    if (!setsButtonBusy) {
+      existingButton.disabled = false;
+
+      restoreSetsButtonIdleText(
+        existingButton,
+        normalizedCount
+      );
+    }
+
+    return existingButton;
+  }
+
+  const newButton =
+    document.createElement("button");
+
   newButton.id = SETS_BUTTON_ID;
   newButton.className = SETS_BUTTON_CLASS;
   newButton.type = "button";
-  newButton.dataset.setsPageKey = pageKey;
-  newButton.textContent = getSetsButtonText(trackCount);
-  newButton.title = "Скачать все треки плейлиста в MP3 и упаковать в ZIP";
 
-  newButton.addEventListener("click", async () => {
-    setsButtonBusy = true;
-    newButton.disabled = true;
-    newButton.textContent =
-      isSoundCloudDiscoverDynamicSetPage()
-        ? "Сканирую весь плейлист..."
-        : "Собираю треки...";
+  newButton.dataset.setsPageKey =
+    pageKey;
 
-    try {
-      const tracks =
-        await collectVisiblePlaylistTracks({
-          onProgress(progress) {
-            if (
-              !isSoundCloudDiscoverDynamicSetPage()
-            ) {
-              return;
-            }
+  newButton.dataset.trackCount =
+    String(normalizedCount);
 
-            const foundCount =
-              Number(progress?.foundCount || 0);
+  newButton.textContent =
+    getSetsButtonText(
+      normalizedCount
+    );
 
-            const totalCount =
-              Number(progress?.totalCount || 0);
+  newButton.title =
+    "Скачать все треки плейлиста в MP3 и упаковать в ZIP";
 
-            if (progress?.stage === "resolve") {
-              newButton.textContent =
-                "Получаю данные плейлиста...";
-              return;
-            }
+  newButton.addEventListener(
+    "click",
+    async () => {
+      if (setsButtonBusy) {
+        return;
+      }
 
-            if (progress?.stage === "playlist") {
-              newButton.textContent =
-                totalCount > 0
-                  ? `Загружаю ${totalCount} треков...`
-                  : "Загружаю список треков...";
+      setsButtonBusy = true;
+      newButton.disabled = true;
 
-              return;
-            }
+      newButton.textContent =
+        isSoundCloudDiscoverSetsPage()
+          ? "Сканирую весь плейлист..."
+          : "Собираю треки...";
 
-            if (progress?.stage === "complete") {
-              newButton.textContent =
-                `Открываю загрузчик (${foundCount})...`;
-            }
+      try {
+        /*
+         * Текущий collectVisiblePlaylistTracks()
+         * не принимает options/onProgress.
+         */
+        const tracks =
+          await collectVisiblePlaylistTracks();
 
-            if (
-                progress?.stage ===
-                "background-scan"
-              ) {
-                newButton.textContent =
-                  "Собираю подборку в фоне...";
+        if (
+          !Array.isArray(tracks) ||
+          tracks.length === 0
+        ) {
+          throw new Error(
+            "Треки плейлиста не найдены"
+          );
+        }
 
-                return;
-              }
+        /*
+         * После сбора знаем настоящее количество.
+         * Для Discover здесь первые 10 заменятся,
+         * например, на полные 30.
+         */
+        const actualTrackCount =
+          tracks.length;
+
+        setsStableTrackCount =
+          actualTrackCount;
+
+        newButton.dataset.trackCount =
+          String(actualTrackCount);
+
+        const clientId = getClientId();
+
+        if (!clientId) {
+          throw new Error(
+            "SoundCloud client_id не найден"
+          );
+        }
+
+        const playlistTitle =
+          extractPlaylistTitle();
+
+        const playlistAuthor =
+          extractPlaylistAuthor();
+
+        newButton.textContent =
+          `Открываю загрузчик (${actualTrackCount})...`;
+
+        const batchId =
+          `batch-${Date.now()}-` +
+          Math.random()
+            .toString(36)
+            .slice(2);
+
+        const storageKey =
+          `playlistBatch:${batchId}`;
+
+        const playlistIndexWidth =
+          Math.max(
+            2,
+            String(
+              actualTrackCount
+            ).length
+          );
+
+        const batchTracks =
+          tracks.map(
+            (track, index) => ({
+              playlistIndex:
+                index + 1,
+
+              playlistIndexWidth,
+
+              trackId:
+                track.trackId || "",
+
+              trackUrn:
+                track.trackUrn || "",
+
+              title:
+                track.title || "",
+
+              author:
+                track.author || "",
+
+              permalinkUrl:
+                track.permalinkUrl || "",
+
+              durationMs:
+                track.durationMs || 0,
+
+              availabilityReason:
+                track.availabilityReason || ""
+            })
+          );
+
+        await setChromeStorageLocal({
+          [storageKey]: {
+            tracks: batchTracks,
+            playlistTitle,
+            playlistAuthor,
+            clientId,
+            createdAt: Date.now()
           }
         });
-      const playlistTitle = extractPlaylistTitle();
-      const playlistAuthor = extractPlaylistAuthor();
-      const clientId = getClientId();
 
-      if (!clientId) {
+        console.log(
+          "[Media Downloader] Sets: batch сохранён",
+          {
+            batchId,
+            tracks:
+              batchTracks.length
+          }
+        );
+
+        const downloaderUrl =
+          chrome.runtime.getURL(
+            "playlist-downloader/" +
+            "playlist-downloader.html" +
+            `?batchId=${encodeURIComponent(
+              batchId
+            )}`
+          );
+
+        await openPlaylistDownloaderUrl(
+          downloaderUrl
+        );
+
         setsButtonBusy = false;
         newButton.disabled = false;
-        newButton.textContent = "client_id не найден";
-        setTimeout(() => {
-          newButton.textContent = `Скачать плейлист (${tracks.length || 0})`;
-        }, 2500);
-        return;
-      }
 
-      if (tracks.length === 0) {
+        newButton.textContent =
+          `Загрузчик открыт (${actualTrackCount}) ✓`;
+
+        setTimeout(() => {
+          if (
+            newButton.isConnected &&
+            !setsButtonBusy
+          ) {
+            restoreSetsButtonIdleText(
+              newButton,
+              actualTrackCount
+            );
+          }
+        }, 1800);
+      } catch (error) {
+        console.error(
+          "[Media Downloader] Sets: playlist collection failed:",
+          error
+        );
+
         setsButtonBusy = false;
-        newButton.textContent = "Треки не найдены";
+        newButton.disabled = false;
+
+        newButton.textContent =
+          "Ошибка сбора плейлиста";
+
+        newButton.title =
+          error?.message ||
+          "Ошибка сбора плейлиста";
+
         setTimeout(() => {
-          newButton.disabled = false;
-          newButton.textContent = "Скачать плейлист";
-        }, 2000);
-        return;
+          if (
+            newButton.isConnected &&
+            !setsButtonBusy
+          ) {
+            restoreSetsButtonIdleText(
+              newButton,
+              setsStableTrackCount
+            );
+
+            newButton.title =
+              "Скачать все треки плейлиста в MP3 и упаковать в ZIP";
+          }
+        }, 2200);
       }
-
-      newButton.textContent = `Открываю загрузчик (${tracks.length})...`;
-
-      const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const storageKey = `playlistBatch:${batchId}`;
-      const playlistIndexWidth = Math.max(2, String(tracks.length).length);
-
-      const batchTracks = tracks.map((track, index) => ({
-        // Фиксируем исходный порядок плейлиста в самом батче.
-        // Downloader использует этот номер в имени файла: 01. Artist - Track.mp3.
-        playlistIndex: index + 1,
-        playlistIndexWidth,
-        trackId: track.trackId || "",
-        trackUrn: track.trackUrn || "",
-        title: track.title || "",
-        author: track.author || "",
-        permalinkUrl: track.permalinkUrl || "",
-        durationMs: track.durationMs || 0,
-        availabilityReason: track.availabilityReason || ""
-      }));
-
-      await setChromeStorageLocal({
-        [storageKey]: {
-          tracks: batchTracks,
-          playlistTitle,
-          playlistAuthor,
-          clientId,
-          createdAt: Date.now()
-        }
-      });
-
-      console.log("[Media Downloader] Sets: batch сохранён в storage fresh-only", {
-        batchId,
-        tracks: batchTracks.length
-      });
-
-      const downloaderUrl = chrome.runtime.getURL(
-        `playlist-downloader/playlist-downloader.html?batchId=${encodeURIComponent(batchId)}`
-      );
-
-      await openPlaylistDownloaderUrl(downloaderUrl);
-
-      setsButtonBusy = false;
-      newButton.disabled = false;
-      newButton.textContent = "Загрузчик открыт ✓";
-    } catch (error) {
-      setsButtonBusy = false;
-      newButton.disabled = false;
-      newButton.textContent = "Ошибка сбора треков";
-      setTimeout(() => {
-        newButton.textContent = "Скачать плейлист";
-      }, 2000);
     }
-  });
+  );
 
-  document.body.appendChild(newButton);
+  (
+    document.body ||
+    document.documentElement
+  ).appendChild(newButton);
+
   return newButton;
 }
 
 function removeSetsButton() {
-  const button = document.getElementById(SETS_BUTTON_ID);
+  const button =
+    document.getElementById(
+      SETS_BUTTON_ID
+    );
 
   setsButtonBusy = false;
 
@@ -2750,13 +2933,17 @@ function removeSetsButton() {
 
 function getCurrentDomPlaylistTrackCount() {
   try {
-    const permalinkCount = collectDomPlaylistTrackPermalinks().length;
-
-    if (permalinkCount > 0) {
-      return permalinkCount;
-    }
-
-    return document.querySelectorAll("a[href*='/tracks/']").length;
+    /*
+     * Используем только строгий сбор строк
+     * текущего плейлиста.
+     *
+     * Широкий a[href*='/tracks/'] мог захватывать
+     * другие элементы страницы и давать лишнее число.
+     */
+    return normalizeSetsTrackCount(
+      collectDomPlaylistTrackPermalinks()
+        .length
+    );
   } catch {
     return 0;
   }
@@ -2767,99 +2954,90 @@ function getCurrentDomPlaylistTrackCount() {
 // Полный список через API достаётся при клике — это медленный запрос.
 function refreshSetsButton() {
 
-  if (
-    isSoundCloudDiscoverScanWorkerPage()
-  ) {
-    removeSetsButton();
+  if (isBlockedSoundCloudDiscoverPage()) {
+    cleanupSoundCloudPlaylistUiOnBlockedPage();
     return;
   }
 
   if (!isSoundCloudSetsPage()) {
     setsStablePageKey = "";
     setsStableTrackCount = 0;
+
     removeSetsButton();
     return;
   }
 
-  const currentPageKey = getCurrentSetsPageKey();
+  const currentPageKey =
+    getCurrentSetsPageKey();
 
   /*
-   * Перешли на другой плейлист — сбрасываем сохранённое количество.
+   * Перешли на другой плейлист.
    */
-  if (setsStablePageKey !== currentPageKey) {
-    setsStablePageKey = currentPageKey;
+  if (
+    setsStablePageKey !==
+    currentPageKey
+  ) {
+    setsStablePageKey =
+      currentPageKey;
+
     setsStableTrackCount = 0;
 
-    const oldButton = document.getElementById(SETS_BUTTON_ID);
+    const oldButton =
+      document.getElementById(
+        SETS_BUTTON_ID
+      );
 
     if (
       oldButton &&
-      oldButton.dataset.setsPageKey !== currentPageKey
+      oldButton.dataset.setsPageKey !==
+        currentPageKey
     ) {
       removeSetsButton();
     }
   }
 
-  const playlistInfo = extractPlaylistFromHydration();
+  const playlistInfo =
+    extractPlaylistFromHydration();
 
-  const hydrationCount = playlistInfo
-    ? Number(
-        playlistInfo.trackCount ||
-        playlistInfo.tracks?.length ||
-        0
-      ) || 0
-    : 0;
+  const hydrationCount =
+    playlistInfo
+      ? normalizeSetsTrackCount(
+          playlistInfo.trackCount ||
+          playlistInfo.tracks?.length
+        )
+      : 0;
 
   const domCount =
-    Number(getCurrentDomPlaylistTrackCount() || 0);
+    getCurrentDomPlaylistTrackCount();
 
   /*
-   * Берём максимальное значение:
-   * hydration может знать полный размер плейлиста,
-   * а DOM может содержать только отрендеренную часть.
+   * Обычный публичный плейлист:
+   * hydration обычно содержит точное track_count.
    */
-  const detectedCount = Math.max(
-    hydrationCount,
-    domCount
+  if (hydrationCount > 0) {
+    setsStableTrackCount =
+      hydrationCount;
+  } else if (domCount > 0) {
+    /*
+     * Discover:
+     * сначала может быть 10, затем 20, затем 30.
+     * Число не уменьшаем во время Ember-render.
+     */
+    setsStableTrackCount =
+      Math.max(
+        setsStableTrackCount,
+        domCount
+      );
+  }
+
+  /*
+   * Кнопку создаём даже при count = 0.
+   * Поэтому она не исчезнет, пока SoundCloud
+   * ещё загружает список.
+   */
+  createSetsButton(
+    setsStableTrackCount
   );
-
-  if (detectedCount > 0) {
-    setsStableTrackCount = Math.max(
-      setsStableTrackCount,
-      detectedCount
-    );
-
-    createSetsButton(setsStableTrackCount);
-    return;
-  }
-
-  const existingButton =
-    document.getElementById(SETS_BUTTON_ID);
-
-  /*
-   * SoundCloud временно удалил строки во время Ember-render.
-   * Если кнопка уже относится к этой странице, оставляем её.
-   */
-  if (
-    existingButton &&
-    existingButton.dataset.setsPageKey === currentPageKey
-  ) {
-    return;
-  }
-
-  /*
-   * Если количество уже было найдено раньше, восстанавливаем кнопку
-   * по сохранённому значению.
-   */
-  if (setsStableTrackCount > 0) {
-    createSetsButton(setsStableTrackCount);
-  }
-
-  /*
-   * Намеренно не вызываем removeSetsButton().
-   * Нулевой DOM здесь чаще означает временную перерисовку,
-   * а не отсутствие треков.
-   */
 }
 
 function runSetsScanSafely() {
@@ -2876,13 +3054,27 @@ function runSetsScanSafely() {
 // Обычный clearTimeout+setTimeout способен откладывать кнопку бесконечно,
 // поэтому раз в SETS_MAX_SCAN_WAIT_MS принудительно запускаем scan.
 function scheduleSetsScan(delay = 400) {
-  const sinceLastScan = Date.now() - setsLastScanRunAt;
-  const effectiveDelay = sinceLastScan >= SETS_MAX_SCAN_WAIT_MS
-    ? Math.min(delay, 50)
-    : delay;
+  if (isBlockedSoundCloudDiscoverPage()) {
+    clearTimeout(setsScanTimer);
+    cleanupSoundCloudPlaylistUiOnBlockedPage();
+    return;
+  }
+
+  const sinceLastScan =
+    Date.now() - setsLastScanRunAt;
+
+  const effectiveDelay =
+    sinceLastScan >= SETS_MAX_SCAN_WAIT_MS
+      ? Math.min(delay, 50)
+      : delay;
 
   clearTimeout(setsScanTimer);
-  setsScanTimer = setTimeout(runSetsScanSafely, effectiveDelay);
+
+  setsScanTimer =
+    setTimeout(
+      runSetsScanSafely,
+      effectiveDelay
+    );
 }
 
 // Слежение за SPA-навигацией: кнопка должна жить только на /sets/.
@@ -2899,14 +3091,37 @@ function scheduleSetsRescansAfterNavigation() {
 
 // Слежение за SPA-навигацией: кнопка должна жить только на актуальной /sets/ странице.
 function handleSetsSpaNavigation() {
-  if (setsLastLocation === window.location.href) return;
+  if (
+    setsLastLocation ===
+    window.location.href
+  ) {
+    return;
+  }
 
-  setsLastLocation = window.location.href;
-  setsLastNavigationAt = Date.now();
+  setsLastLocation =
+    window.location.href;
 
-  // Не даём старой кнопке пережить переход на другой плейлист.
+  setsLastNavigationAt =
+    Date.now();
+
+  /*
+   * При переходе на точную страницу /discover
+   * удаляем кнопки сразу, не ожидая следующего скана.
+   */
+  if (isBlockedSoundCloudDiscoverPage()) {
+    cleanupSoundCloudPlaylistUiOnBlockedPage();
+    return;
+  }
+
+  /*
+   * Не даём старой кнопке пережить переход
+   * между страницами и плейлистами.
+   */
   removeSetsButton();
+  cleanupInlineSoundCloudPlaylistButtons();
+
   scheduleSetsRescansAfterNavigation();
+  scheduleInlineSoundCloudPlaylistScan(500);
 }
 
 function installSetsSpaNavigationHooks() {

@@ -2,13 +2,167 @@ function getCurrentSiteHost() {
   return window.location.hostname;
 }
 
+function deactivateMediaDownloaderOnPage() {
+  /*
+   * Сначала удаляем все созданные расширением кнопки.
+   */
+  document
+    .querySelectorAll(
+      [
+        `.${MEDIA_DOWNLOADER_ICON_CLASS}`,
+        ".media-downloader-sets-button",
+        ".media-downloader-inline-sets-button",
+        ".media-downloader-inline-sets-slot"
+      ].join(",")
+    )
+    .forEach((element) => {
+      element.remove();
+    });
+
+  /*
+   * Закрываем встроенные панели.
+   */
+  document
+    .getElementById(HLS_PANEL_ID)
+    ?.remove();
+
+  document
+    .getElementById(DASH_PANEL_ID)
+    ?.remove();
+
+  /*
+   * Возвращаем video/audio из созданных нами обёрток.
+   * Это особенно важно для Twitch.
+   */
+  document
+    .querySelectorAll(
+      ".media-downloader-media-wrapper"
+    )
+    .forEach((wrapper) => {
+      const mediaElement =
+        wrapper.querySelector(
+          ":scope > video, :scope > audio"
+        );
+
+      if (
+        !mediaElement ||
+        !wrapper.parentNode
+      ) {
+        return;
+      }
+
+      wrapper.parentNode.insertBefore(
+        mediaElement,
+        wrapper
+      );
+
+      wrapper.remove();
+    });
+
+  document
+    .querySelectorAll(
+      ".media-downloader-audio-with-button"
+    )
+    .forEach((element) => {
+      element.classList.remove(
+        "media-downloader-audio-with-button"
+      );
+    });
+
+  /*
+   * Удаляем служебные атрибуты,
+   * но не трогаем обычные атрибуты сайта.
+   */
+  document
+    .querySelectorAll(
+      [
+        "[data-media-downloader-track]",
+        `[${ICON_ADDED_ATTRIBUTE}]`,
+        `[${TRACK_CAPTURE_ATTRIBUTE}]`,
+        `[${TRACK_STREAM_URL_ATTRIBUTE}]`,
+        `[${TRACK_STREAM_TYPE_ATTRIBUTE}]`,
+        `[${TRACK_BOUND_ATTRIBUTE}]`,
+        `[${TRACK_ADAPTER_ATTRIBUTE}]`,
+        `[${TRACK_PERMALINK_ATTRIBUTE}]`
+      ].join(",")
+    )
+    .forEach((element) => {
+      element.removeAttribute(
+        "data-media-downloader-track"
+      );
+
+      element.removeAttribute(
+        ICON_ADDED_ATTRIBUTE
+      );
+
+      element.removeAttribute(
+        TRACK_CAPTURE_ATTRIBUTE
+      );
+
+      element.removeAttribute(
+        TRACK_STREAM_URL_ATTRIBUTE
+      );
+
+      element.removeAttribute(
+        TRACK_STREAM_TYPE_ATTRIBUTE
+      );
+
+      element.removeAttribute(
+        TRACK_BOUND_ATTRIBUTE
+      );
+
+      element.removeAttribute(
+        TRACK_ADAPTER_ATTRIBUTE
+      );
+
+      element.removeAttribute(
+        TRACK_PERMALINK_ATTRIBUTE
+      );
+
+      element.removeAttribute(
+        "data-media-downloader-capturing"
+      );
+
+      delete element.dataset
+        .mediaDownloaderLastCaptureAt;
+
+      delete element.dataset
+        .mediaDownloaderLastHlsCheckAt;
+    });
+
+  mediaDownloaderCaptureToTrackId.clear();
+}
+
 function applyMediaDownloaderUiState(enabled) {
-  mediaDownloaderUiEnabled = Boolean(enabled);
+  mediaDownloaderUiEnabled =
+    Boolean(enabled);
 
   document.documentElement.classList.toggle(
     "media-downloader-ui-disabled",
     !mediaDownloaderUiEnabled
   );
+
+  if (!mediaDownloaderUiEnabled) {
+    deactivateMediaDownloaderOnPage();
+    return;
+  }
+
+  /*
+   * После ручного включения сразу запускаем скан.
+   */
+  if (
+    typeof scheduleMediaDownloaderScan ===
+    "function"
+  ) {
+    scheduleMediaDownloaderScan(50);
+  }
+
+  if (
+    typeof scheduleSetsScan ===
+    "function"
+  ) {
+    scheduleSetsScan(100);
+  }
 }
 
 function loadMediaDownloaderUiState() {
@@ -287,6 +441,11 @@ function cleanupMediaDownloaderOnBlockedSoundCloudPage() {
 }
 
 function scanAndAddIcons() {
+
+  if (!mediaDownloaderUiEnabled) {
+    return;
+  }
+
   injectStyles();
   cleanupBrokenDownloaderMarks();
 

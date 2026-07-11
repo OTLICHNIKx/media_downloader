@@ -1,6 +1,10 @@
 document.addEventListener(
   "pointerdown",
   (event) => {
+        if (!mediaDownloaderUiEnabled) {
+          return;
+        }
+
     const target = event.target;
 
     if (target instanceof Element && target.closest(`.${MEDIA_DOWNLOADER_ICON_CLASS}`)) {
@@ -18,6 +22,16 @@ document.addEventListener(
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "RESCAN_MEDIA_DOWNLOADER_PAGE") {
+    if (!mediaDownloaderUiEnabled) {
+        sendResponse({
+          ok: true,
+          disabled: true,
+          media: []
+        });
+
+        return;
+      }
+
     try {
       scanAndAddIcons();
 
@@ -169,6 +183,10 @@ mediaDownloaderLastScanRunAt = Date.now();
 scheduleMediaDownloaderRescansAfterNavigation();
 
 const observer = new MutationObserver(() => {
+  if (!mediaDownloaderUiEnabled) {
+    return;
+  }
+
   handlePossibleSpaNavigation();
   scheduleMediaDownloaderScan(350);
 });
@@ -179,6 +197,10 @@ observer.observe(document.documentElement, {
 });
 
 setInterval(() => {
+  if (!mediaDownloaderUiEnabled) {
+    return;
+  }
+
   handlePossibleSpaNavigation();
   scheduleMediaDownloaderScan(300);
 }, 3000);
